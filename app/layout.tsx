@@ -17,6 +17,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="icon" type="image/png" sizes="192x192" href="/android-chrome-192x192.png" />
         <link rel="icon" type="image/png" sizes="512x512" href="/android-chrome-512x512.png" />
         <meta name="theme-color" content="#ffffff" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover"
+        />
         <style>{`
           html, body {
             margin: 0;
@@ -69,6 +73,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             display: flex;
             justify-content: center;
             pointer-events: none;
+            text-shadow: 0 0 8px rgba(0,0,0,0.8);
           }
           .site-footer a {
             pointer-events: auto;

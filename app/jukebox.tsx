@@ -343,6 +343,7 @@ function initThree(
   controls.minPolarAngle = Math.PI / 2;
   controls.maxPolarAngle = Math.PI / 2;
   controls.enableZoom = false; // we drive zoom ourselves via mode.zoom
+  controls.enablePan = false;  // two-finger drag should never pan the camera
   // rotateSpeed is set later, once COLS is known.
 
   const hemiLight = new THREE.HemisphereLight(0xffffff, 0x333333, 0.5);
@@ -983,15 +984,20 @@ function initThree(
     try { await play(card.userData.song.uri); } catch {}
   }
 
-  // Tap/drag handling:
-  //  • A pointer that moves <DRAG_THRESHOLD px in <500ms = tap (card / button)
-  //  • Vertical drag updates mode.lighting (up = rink, down = diner)
-  //  • Horizontal drag flows through OrbitControls (rotation)
-  //  • Double-tap on chrome (anywhere not hitting a card) snaps zoom max/min
+  // Tap/drag/pinch handling:
+  //  • Tap (move <DRAG_THRESHOLD px in <500ms) → card / button
+  //  • Single-finger vertical drag → mode.lighting
+  //  • Single-finger horizontal drag → OrbitControls rotation
+  //  • Two-finger pinch → mode.zoom (mobile equivalent of mouse wheel)
+  //  • Double-tap on chrome → snap zoom max/min
   const DRAG_THRESHOLD = 6;
   const DOUBLE_TAP_MS = 350;
   let downX = 0, downY = 0, downAt = 0, lastY = 0, isDragging = false;
   let lastTapAt = 0;
+  const activePointers = new Map<number, { x: number; y: number }>();
+  let pinchBaseDist = 0;
+  let pinchBaseZoom = 0;
+  let isPinching = false;
   function getXY(event: any) {
     const e = event.touches ? event.touches[0] : event;
     return { x: e.clientX, y: e.clientY };
@@ -999,18 +1005,43 @@ function initThree(
   function onPointerDown(event: any) {
     initAudio();
     const { x, y } = getXY(event);
+    if (event.pointerId !== undefined) activePointers.set(event.pointerId, { x, y });
     downX = x; downY = y; lastY = y; downAt = Date.now();
     isDragging = true;
+    if (activePointers.size === 2) {
+      const pts = Array.from(activePointers.values());
+      pinchBaseDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchBaseZoom = mode.zoom;
+      isPinching = true;
+      controls.enabled = false; // freeze drum rotation while pinching
+    }
   }
   function onPointerMove(event: any) {
     if (!isDragging) return;
-    const { y } = getXY(event);
+    const { x, y } = getXY(event);
+    if (event.pointerId !== undefined) activePointers.set(event.pointerId, { x, y });
+
+    if (isPinching && activePointers.size >= 2) {
+      const pts = Array.from(activePointers.values());
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const ratio = dist / Math.max(pinchBaseDist, 1);
+      // Spread → zoom in; pinch → zoom out. Scale 1× of dist change ≈ full range.
+      mode.zoom = clamp(pinchBaseZoom + (ratio - 1), 0, 1);
+      lastY = y; // keep lastY current so lighting doesn't jump after pinch ends
+      return;
+    }
+
     const dy = y - lastY;
     lastY = y;
-    // Up drag (negative dy) → increase rink; down drag → diner
     mode.lighting = clamp(mode.lighting - dy * 0.003, 0, 1);
   }
   function onPointerUp(event: any) {
+    if (event.pointerId !== undefined) activePointers.delete(event.pointerId);
+    if (activePointers.size < 2 && isPinching) {
+      isPinching = false;
+      controls.enabled = true;
+    }
+    if (activePointers.size > 0) return; // wait for all fingers to lift
     isDragging = false;
     const { x, y } = getXY(event.changedTouches ? { touches: event.changedTouches } : event);
     const dx = x - downX, dy = y - downY;
@@ -1041,6 +1072,7 @@ function initThree(
   window.addEventListener('pointerdown', onPointerDown);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
 
   // Scroll wheel drives zoom (0 = fit, 1 = tight on cards). Track-pad pinch
   // also produces wheel events with ctrlKey set.
@@ -1315,6 +1347,7 @@ function initThree(
     window.removeEventListener('pointerdown', onPointerDown);
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
     window.removeEventListener('resize', onResize);
     renderer.domElement.removeEventListener('wheel', onWheel);
     camera.remove(buttonRow);
