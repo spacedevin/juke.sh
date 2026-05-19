@@ -1,6 +1,6 @@
 import { Github, Heart } from 'lucide-react';
 
-export const metadata = { title: 'Jukebox' };
+export const metadata = { title: 'juke.sh - Spotify WebGL Jukebox' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
