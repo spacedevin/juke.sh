@@ -1213,9 +1213,15 @@ function initThree(
       }
     }
 
-    // Demo mode: continuously rotate the drum to scroll cards past the camera
+    // Demo mode: orbit the CAMERA around the jukebox (same as the user dragging
+    // left/right) so direction-tracking lights (dirLight, fillFrontAmber) also
+    // rotate and the scene feels alive. Spinning jukeboxGroup alone leaves the
+    // lights static.
     if (mode.demoSpin) {
-      jukeboxGroup.rotation.y += mode.demoSpin;
+      const az = controls.getAzimuthalAngle() + mode.demoSpin;
+      const r = Math.hypot(camera.position.x, camera.position.z);
+      camera.position.x = Math.sin(az) * r;
+      camera.position.z = Math.cos(az) * r;
     }
 
     controls.update();
