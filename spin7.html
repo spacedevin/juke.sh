@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D 50s Diner Jukebox - Roller Rink & Mechanics</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Courier+Prime:wght@400;700&family=Fjalla+One&family=Impact&family=Oswald:wght@500;700&family=Righteous&family=Pacifico&family=Lobster&family=Fascinate&family=Limelight&family=Poiret+One&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Monoton&family=Bungee&family=Rampart+One&family=Cinzel:wght@700&family=Playfair+Display:wght@900&family=Abril+Fatface&family=Rubik+Mono+One&family=Bangers&family=Press+Start+2P&display=swap" rel="stylesheet">
+    
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #11090c 0%, #000000 100%);
+            font-family: 'Courier Prime', monospace;
+            touch-action: none;
+        }
+        #webgl-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 10;
+        }
+        .instruction-badge {
+            background: rgba(0, 0, 0, 0.8);
+            color: #00ffff;
+            padding: 8px 24px;
+            border-radius: 999px;
+            border: 1px solid #00ffff;
+            font-size: 14px;
+            font-family: 'Righteous', sans-serif;
+            letter-spacing: 2px;
+            backdrop-filter: blur(8px);
+            text-shadow: 0 0 8px #00ffff;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.4), inset 0 0 10px rgba(0, 255, 255, 0.2);
+            animation: pulse-neon 2s infinite;
+        }
+        #now-playing {
+            margin-top: 16px;
+            background: rgba(20, 10, 15, 0.95);
+            color: #ff00ff;
+            padding: 16px 36px;
+            border-radius: 16px;
+            border: 3px solid #ff00ff;
+            font-size: 20px;
+            font-family: 'Righteous', sans-serif;
+            text-transform: uppercase;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.9), 0 0 20px rgba(255, 0, 255, 0.5), inset 0 0 15px rgba(255, 0, 255, 0.3);
+            text-shadow: 0 0 10px #ff00ff;
+            opacity: 1;
+            transform: translateY(0);
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            max-width: 90vw;
+            text-align: center;
+        }
+        #now-playing.idle {
+            opacity: 0;
+            transform: translateY(-30px);
+        }
+        .marquee { display: inline-block; }
+        @keyframes pulse-neon {
+            0% { box-shadow: 0 0 15px rgba(0, 255, 255, 0.4), inset 0 0 10px rgba(0, 255, 255, 0.2); }
+            50% { box-shadow: 0 0 25px rgba(0, 255, 255, 0.8), inset 0 0 15px rgba(0, 255, 255, 0.5); }
+            100% { box-shadow: 0 0 15px rgba(0, 255, 255, 0.4), inset 0 0 10px rgba(0, 255, 255, 0.2); }
+        }
+        #button-container {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 20;
+        }
+        #button-container button {
+            pointer-events: auto;
+            background: rgba(20, 10, 15, 0.8);
+            color: #00ffff;
+            border: 2px solid #00ffff;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: 'Righteous', sans-serif;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            backdrop-filter: blur(4px);
+        }
+        #button-container button:hover {
+            background: rgba(0, 255, 255, 0.2);
+        }
+        #fit-toggle {
+            color: #ff00ff !important;
+            border-color: #ff00ff !important;
+        }
+        #fit-toggle:hover {
+            background: rgba(255, 0, 255, 0.2) !important;
+        }
+    </style>
+</head>
+<body>
+
+<div id="webgl-container"></div>
+<div id="ui-overlay">
+    <div class="instruction-badge">DRAG TO SPIN • TAP TO PLAY</div>
+    <div id="now-playing">
+        <span class="marquee" id="np-text">Loading Fonts & 432 Records...</span>
+    </div>
+</div>
+<div id="button-container">
+    <button id="lighting-toggle">LIGHTING: ROLLER RINK</button>
+    <button id="fit-toggle">ZOOM TO CARDS</button>
+</div>
+
+<script>
+    // --- UI MODE STATES ---
+    let isClassicLighting = false;
+    document.getElementById('lighting-toggle').addEventListener('click', (e) => {
+        isClassicLighting = !isClassicLighting;
+        e.target.innerText = isClassicLighting ? 'LIGHTING: CLASSIC DINER' : 'LIGHTING: ROLLER RINK';
+        e.target.style.color = isClassicLighting ? '#ffaa55' : '#00ffff';
+        e.target.style.borderColor = isClassicLighting ? '#ffaa55' : '#00ffff';
+    });
+
+    let isFitMode = true;
+    let isAutoTransitioning = false;
+    document.getElementById('fit-toggle').addEventListener('click', (e) => {
+        isFitMode = !isFitMode;
+        e.target.innerText = isFitMode ? 'ZOOM TO CARDS' : 'FIT TO SCREEN';
+        isAutoTransitioning = true;
+    });
+
+    // --- AUDIO SYSTEM ---
+    let audioInitialized = false;
+    let clunkSynth, beepSynth, humSynth;
+
+    async function initAudio() {
+        if (audioInitialized) return;
+        await Tone.start();
+        
+        clunkSynth = new Tone.MembraneSynth({
+            pitchDecay: 0.01, octaves: 2, oscillator: { type: "square" },
+            envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 }
+        }).toDestination();
+        clunkSynth.volume.value = -5;
+
+        beepSynth = new Tone.PolySynth(Tone.Synth, {
+            oscillator: { type: "triangle" },
+            envelope: { attack: 0.05, decay: 0.2, sustain: 0.2, release: 1 }
+        }).toDestination();
+        beepSynth.volume.value = -12;
+
+        humSynth = new Tone.Noise("pink");
+        const lowpass = new Tone.Filter(150, "lowpass").toDestination();
+        humSynth.connect(lowpass);
+        humSynth.volume.value = -25; 
+
+        audioInitialized = true;
+    }
+
+    function playSelectionSound() {
+        if (!audioInitialized) return;
+        clunkSynth.triggerAttackRelease("G1", "16n");
+        setTimeout(() => { beepSynth.triggerAttackRelease(["C4", "E4", "G4"], "8n"); }, 150);
+        if (humSynth.state !== "started") humSynth.start();
+    }
+
+    // --- THREE.JS SETUP ---
+    const container = document.getElementById('webgl-container');
+    const scene = new THREE.Scene();
+    
+    scene.fog = new THREE.Fog(0x0a0508, 100, 300);
+    scene.background = new THREE.Color(0x0a0508);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 5, 60); 
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxDistance = 300; 
+    controls.minDistance = 22;
+    controls.minAzimuthAngle = -Infinity;
+    controls.maxAzimuthAngle = Infinity;
+    controls.minPolarAngle = Math.PI / 6;
+    controls.maxPolarAngle = Math.PI / 2 + 0.1; 
+    
+    controls.addEventListener('start', () => {
+        isAutoTransitioning = false;
+    });
+
+    // Base lighting setup
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x333333, 0.5);
+    scene.add(hemiLight);
+    
+    // Dedicated Ambient Light ONLY for Zoomed-In Flat UI Mode
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.0);
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffeedd, 0.5);
+    dirLight.position.set(0, 20, 30);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 10;
+    dirLight.shadow.camera.far = 300; 
+    dirLight.shadow.camera.left = -40;
+    dirLight.shadow.camera.right = 40;
+    dirLight.shadow.camera.top = 40;
+    dirLight.shadow.camera.bottom = -40;
+    dirLight.shadow.bias = -0.001;
+    scene.add(dirLight);
+
+    // Camera Headlight: Shines exactly where you look to give specular highlights to brackets when zoomed in
+    const cameraLight = new THREE.DirectionalLight(0xffffff, 0.0);
+    scene.add(cameraLight);
+    scene.add(cameraLight.target);
+    
+    const pointLight1 = new THREE.PointLight(0x00ffff, 1.2, 80);
+    pointLight1.position.set(-25, 10, 25);
+    scene.add(pointLight1);
+    const pointLight2 = new THREE.PointLight(0xff00ff, 1.2, 80);
+    pointLight2.position.set(25, -10, -25);
+    scene.add(pointLight2);
+
+    // --- 360 DRUM CAROUSEL MATH ---
+    const COLS = 36;
+    const ROWS = 12; 
+    const CARD_W = 3.2;
+    const CARD_H = 1.25;
+    const ROW_SPACING = 1.4;
+    const ANGLE_RANGE = Math.PI * 2;
+    const COL_ANGLE = ANGLE_RANGE / COLS;
+    const R = (COLS * (CARD_W + 0.3)) / (2 * Math.PI); 
+    const startY = (ROWS * ROW_SPACING) / 2 - ROW_SPACING / 2;
+    const HEIGHT_TOTAL = ROWS * ROW_SPACING + 4;
+
+    const jukeboxGroup = new THREE.Group();
+    scene.add(jukeboxGroup);
+
+    // --- 1950s DINER CHECKERBOARD FLOOR ---
+    const floorCanvas = document.createElement('canvas');
+    floorCanvas.width = 1024; floorCanvas.height = 1024;
+    const fctx = floorCanvas.getContext('2d');
+    fctx.fillStyle = '#050505'; fctx.fillRect(0,0,1024,1024);
+    fctx.fillStyle = '#e8e8e8';
+    for(let i=0; i<1024; i+=128) {
+        for(let j=0; j<1024; j+=128) {
+            if((i/128 + j/128)%2 === 0) fctx.fillRect(i,j,128,128);
+        }
+    }
+    const floorTex = new THREE.CanvasTexture(floorCanvas);
+    floorTex.wrapS = THREE.RepeatWrapping; floorTex.wrapT = THREE.RepeatWrapping;
+    floorTex.repeat.set(16, 16);
+    floorTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    
+    const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.1, metalness: 0.4, color: 0xaaaaaa }); 
+    const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), floorMat);
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.position.y = -HEIGHT_TOTAL / 2 - 3;
+    floorMesh.receiveShadow = true; 
+    scene.add(floorMesh);
+
+    // --- PROCEDURAL CHROME ENVIRONMENT MAP ---
+    const envCanvas = document.createElement('canvas');
+    envCanvas.width = 1024; envCanvas.height = 512;
+    const envCtx = envCanvas.getContext('2d');
+    
+    envCtx.fillStyle = '#050203'; envCtx.fillRect(0,0,1024,512);
+    for(let i=0; i<30; i++) {
+        envCtx.fillStyle = ['#00ffff', '#ff00ff', '#ffffff', '#ffaa00'][Math.floor(Math.random()*4)];
+        envCtx.globalAlpha = 0.2 + Math.random() * 0.8;
+        envCtx.fillRect(Math.random()*1024, Math.random()*512, 100 + Math.random()*300, 5 + Math.random()*20);
+    }
+    
+    const envTex = new THREE.CanvasTexture(envCanvas);
+    envTex.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = envTex;
+
+    // --- JUKEBOX HARDWARE ---
+    const goldMaterial = new THREE.MeshStandardMaterial({ color: 0xe5b45c, metalness: 1.0, roughness: 0.15 });
+    const chromeMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 1.0, roughness: 0.1 });
+    const tealMaterial = new THREE.MeshStandardMaterial({ color: 0x006666, metalness: 0.4, roughness: 0.4 });
+    const drumMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.7, roughness: 0.3 });
+    const aluminumMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.9, roughness: 0.4 }); 
+    const whiteBracketMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 0.2, roughness: 0.6 }); 
+
+    const drumMesh = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.02, R + 0.02, HEIGHT_TOTAL - 1, 64), drumMaterial);
+    drumMesh.receiveShadow = true;
+    jukeboxGroup.add(drumMesh);
+
+    const rimGeo = new THREE.TorusGeometry(R + 0.2, 0.6, 16, 64);
+    const topRim = new THREE.Mesh(rimGeo, goldMaterial);
+    topRim.rotation.x = Math.PI / 2; topRim.position.y = HEIGHT_TOTAL / 2;
+    topRim.castShadow = true;
+    jukeboxGroup.add(topRim);
+    const botRim = new THREE.Mesh(rimGeo, goldMaterial);
+    botRim.rotation.x = Math.PI / 2; botRim.position.y = -HEIGHT_TOTAL / 2;
+    jukeboxGroup.add(botRim);
+
+    const neonGeo = new THREE.TorusGeometry(R + 1.2, 0.15, 16, 64);
+    const neonMatTop = new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 2.0 });
+    const neonTop = new THREE.Mesh(neonGeo, neonMatTop);
+    neonTop.rotation.x = Math.PI / 2; neonTop.position.y = HEIGHT_TOTAL / 2 + 0.5;
+    jukeboxGroup.add(neonTop);
+    
+    const neonMatBot = new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0xff00ff, emissiveIntensity: 2.0 });
+    const neonBot = new THREE.Mesh(neonGeo, neonMatBot);
+    neonBot.rotation.x = Math.PI / 2; neonBot.position.y = -HEIGHT_TOTAL / 2 - 0.5;
+    jukeboxGroup.add(neonBot);
+
+    const glassGeo = new THREE.CylinderGeometry(R + 1.6, R + 1.6, HEIGHT_TOTAL + 2, 64, 1, true);
+    const glassMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.1, roughness: 0.05, metalness: 0.9, clearcoat: 1.0, side: THREE.FrontSide });
+    jukeboxGroup.add(new THREE.Mesh(glassGeo, glassMat));
+
+    for (let i = 0; i < COLS; i++) {
+        const theta = i * COL_ANGLE;
+        const bracketGroup = new THREE.Group();
+        
+        if (i % 2 === 0) {
+            const baseMesh = new THREE.Mesh(new THREE.BoxGeometry(0.5, HEIGHT_TOTAL - 2, 0.4), tealMaterial);
+            baseMesh.castShadow = true; baseMesh.receiveShadow = true;
+            bracketGroup.add(baseMesh);
+            
+            const pipeL = new THREE.Mesh(new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04), chromeMat);
+            pipeL.position.set(-0.15, 0, 0.2); 
+            bracketGroup.add(pipeL);
+            
+            const pipeR = new THREE.Mesh(new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04), chromeMat);
+            pipeR.position.set(0.15, 0, 0.2);
+            bracketGroup.add(pipeR);
+
+            bracketGroup.position.set(Math.sin(theta) * (R + 0.12), 0, Math.cos(theta) * (R + 0.12));
+        } else {
+            const baseMesh = new THREE.Mesh(new THREE.BoxGeometry(0.3, HEIGHT_TOTAL - 2, 0.15), aluminumMat);
+            baseMesh.castShadow = true; baseMesh.receiveShadow = true;
+            bracketGroup.add(baseMesh);
+            
+            const spineMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, HEIGHT_TOTAL - 2, 0.08), chromeMat);
+            spineMesh.position.set(0, 0, 0.1);
+            bracketGroup.add(spineMesh);
+
+            bracketGroup.position.set(Math.sin(theta) * (R + 0.12), 0, Math.cos(theta) * (R + 0.12));
+        }
+        
+        bracketGroup.rotation.y = theta; 
+        jukeboxGroup.add(bracketGroup);
+    }
+
+    for (let r = 0; r <= ROWS; r++) {
+        const y = startY - r * ROW_SPACING + ROW_SPACING / 2;
+        const ringGeo = new THREE.TorusGeometry(R + 0.08, 0.1, 16, 64);
+        const ringMesh = new THREE.Mesh(ringGeo, whiteBracketMat);
+        ringMesh.rotation.x = Math.PI / 2;
+        ringMesh.position.y = y;
+        ringMesh.castShadow = true;
+        ringMesh.receiveShadow = true;
+        jukeboxGroup.add(ringMesh);
+    }
+
+    const ledGeo = new THREE.CylinderGeometry(0.02, 0.02, CARD_W - 0.1, 8);
+    ledGeo.rotateZ(Math.PI / 2); 
+    const ledMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+
+    const localLed1 = new THREE.PointLight(0xffd580, 0, 15);
+    const ledMesh1 = new THREE.Mesh(ledGeo, ledMat);
+    localLed1.add(ledMesh1);
+    jukeboxGroup.add(localLed1);
+
+    const localLed2 = new THREE.PointLight(0xffd580, 0, 15);
+    const ledMesh2 = new THREE.Mesh(ledGeo, ledMat);
+    localLed2.add(ledMesh2);
+    jukeboxGroup.add(localLed2);
+
+    // --- PROCEDURAL DATA & MODULAR GENERATOR ---
+    function xmur3(str) {
+        for(var i = 0, h = 1779033703 ^ str.length; i < str.length; i++) {
+            h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+            h = h << 13 | h >>> 19;
+        } return function() {
+            h = Math.imul(h ^ (h >>> 16), 2246822507);
+            h = Math.imul(h ^ (h >>> 13), 3266489909);
+            return (h ^= h >>> 16) >>> 0;
+        }
+    }
+
+    const artists = ["Elvis Presley", "Chuck Berry", "Little Richard", "Fats Domino", "Buddy Holly", "Jerry Lee Lewis", "Gene Vincent", "Roy Orbison", "Everly Brothers", "Ray Charles", "Sam Cooke", "Jackie Wilson", "The Drifters", "The Coasters", "Dion", "Patsy Cline", "Brenda Lee", "Bill Haley", "Carl Perkins", "Ricky Nelson", "Wanda Jackson", "Ritchie Valens", "Frank Sinatra", "Dean Martin", "Paul Anka", "Johnny Cash", "The Platters", "Etta James"];
+    const adjectives = ["Blue", "Crazy", "Sweet", "Rockin'", "Wild", "Lonely", "Shake", "Rollin'", "Magic", "Jive", "Good", "Bad", "Fast", "Slow", "Heartbreak", "Midnight", "Silver", "Golden", "Happy", "Sad", "Twistin'", "Atomic", "Neon", "Plastic", "Radio"];
+    const nouns = ["Shoes", "Love", "Baby", "Night", "Heart", "Star", "Moon", "Cat", "Dog", "Train", "Tears", "Dreams", "Doll", "Angel", "Boogie", "Twist", "Beat", "Town", "River", "Road", "Dance", "Rocket", "Juke", "Diner", "Flame"];
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
+    
+    let playlist = [];
+    for(let i=0; i < (COLS * ROWS); i++) {
+        let art = artists[i % artists.length];
+        let titleA = adjectives[(i * 3) % adjectives.length] + " " + nouns[(i * 7) % nouns.length];
+        let titleB = adjectives[(i * 5) % adjectives.length] + " " + nouns[(i * 11) % nouns.length];
+        let code = letters[Math.floor(i / ROWS) % letters.length] + ((i % ROWS) + 1);
+        playlist.push({ titleA, titleB, artist: art, code });
+    }
+    playlist = playlist.sort(() => Math.random() - 0.5);
+
+    const palettes = [
+        ['#e63946', '#f1faee', '#1d3557', '#a8dadc'], ['#ffb703', '#fb8500', '#023047', '#8ecae6'],
+        ['#ef476f', '#ffd166', '#06d6a0', '#073b4c'], ['#ffffff', '#000000', '#dddddd', '#ff0000'],
+        ['#f4a261', '#e76f51', '#2a9d8f', '#264653'], ['#8ecae6', '#219ebc', '#023047', '#ffb703'],
+        ['#d9ed92', '#b5e48c', '#34a0a4', '#1a759f'], ['#2b2d42', '#8d99ae', '#edf2f4', '#d90429'],
+        ['#000000', '#14213d', '#fca311', '#e5e5e5'], ['#3d5a80', '#98c1d9', '#e0fbfc', '#ee6c4d'],
+        ['#ff9f1c', '#ffbf69', '#ffffff', '#cbf3f0'], ['#f72585', '#7209b7', '#3a0ca3', '#4cc9f0'],
+        ['#dad7cd', '#a3b18a', '#588157', '#344e41'], ['#fec5bb', '#fcd5ce', '#fae1dd', '#f8edeb'],
+        ['#000000', '#d4af37', '#ffffff', '#111111'], ['#ff00ff', '#00ffff', '#000000', '#ffff00'],
+        ['#f4e285', '#f4a259', '#5b8e7d', '#bc4b51'], ['#2a0800', '#f4d03f', '#e74c3c', '#ffffff'],
+        ['#fdf6e3', '#eee8d5', '#073642', '#cb4b16'], ['#4a4e69', '#9a8c98', '#c9ada7', '#f2e9e4'],
+        ['#ff595e', '#ffca3a', '#8ac926', '#1982c4'], ['#1d3557', '#457b9d', '#a8dadc', '#e63946'],
+        ['#283618', '#606c38', '#fefae0', '#dda15e'], ['#5f0f40', '#9a031e', '#fb8b24', '#e36414'],
+        ['#0b132b', '#1c2541', '#3a506b', '#5bc0be'], ['#335c67', '#fff3b0', '#e09f3e', '#9e2a2b'],
+        ['#003049', '#d62828', '#f77f00', '#fcbf49'], ['#22223b', '#4a4e69', '#9a8c98', '#c9ada7'],
+        ['#0d3b66', '#faf0ca', '#f4d35e', '#ee964b'], ['#f94144', '#f3722c', '#f8961e', '#f9c74f'],
+        ['#5d5c61', '#379683', '#7395ae', '#557a95'], ['#1a1a1d', '#4e4e50', '#6f2232', '#950740'],
+        ['#c0c0c0', '#ffffff', '#808080', '#000000'], ['#ffe066', '#247ba0', '#70c1b3', '#50514f'],
+        ['#6b2d5c', '#f0386b', '#ff5376', '#f8c0c8']
+    ];
+
+    const displayFonts = ["'Anton'", "'Bebas Neue'", "'Impact'", "'Righteous'", "'Fjalla One'", "'Limelight'", "'Rampart One'", "'Rubik Mono One'", "'Abril Fatface'", "'Bungee'", "'Bangers'"];
+    const scriptFonts = ["'Pacifico'", "'Lobster'", "'Yellowtail'", "'Satisfy'", "'Shrikhand'", "'Permanent Marker'", "'Fascinate'"];
+    const infoFonts = ["'Courier Prime'", "'Oswald'", "'Cinzel'", "'Playfair Display'", "'Poiret One'", "Arial"];
+
+    function getContrast(hex) {
+        if (!hex || hex[0] !== '#') return '#000000';
+        let r = parseInt(hex.substr(1,2), 16); let g = parseInt(hex.substr(3,2), 16); let b = parseInt(hex.substr(5,2), 16);
+        return (((r*299)+(g*587)+(b*114))/1000 >= 128) ? '#000000' : '#ffffff';
+    }
+
+    const cards = [];
+    let activeCard = null;
+
+    function generateCardTexture(song) {
+        const seedStr = song.titleA + song.artist + song.code;
+        const seedGen = xmur3(seedStr);
+        const rnd = () => (seedGen() >>> 0) / 4294967296;
+        const rndInt = (max) => Math.floor(rnd() * max);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 256; canvas.height = 100;
+        const ctx = canvas.getContext('2d');
+
+        // Bounded to 30 styles matching our massive visual dictionary
+        const bgStyle = rndInt(30); const decorStyle = rndInt(30);
+        const borderStyle = rndInt(9); const layoutStyle = rndInt(30);
+        const fDisp = displayFonts[rndInt(displayFonts.length)];
+        const fScrpt = scriptFonts[rndInt(scriptFonts.length)];
+        const fInfo = infoFonts[rndInt(infoFonts.length)];
+
+        const pal = palettes[rndInt(palettes.length)];
+        const bg1 = pal[0]; const bg2 = pal[1]; const acc1 = pal[2]; const acc2 = pal[3];
+        const tc1 = getContrast(bg1);
+
+        const drawAdvText = (text, x, y, font, color, align, scaleX=1, scaleY=1, rot=0, shadow=false) => {
+            ctx.save(); if(shadow) { ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowOffsetX = 3; ctx.shadowOffsetY = 3; ctx.shadowBlur = 0; }
+            ctx.fillStyle = color; ctx.font = font; ctx.textAlign = align; ctx.textBaseline = 'middle';
+            ctx.translate(x, y); ctx.rotate(rot); ctx.scale(scaleX, scaleY); ctx.fillText(text, 0, 0, 240 / scaleX); ctx.restore();
+        };
+
+        const drawIcon = (type, cx, cy, size, color) => {
+            ctx.fillStyle = color; ctx.beginPath();
+            if(type===0){ for(let i=0; i<10; i++){ let r=(i%2===0)?size:size/2; let a=(i/10)*Math.PI*2-Math.PI/2; ctx.lineTo(cx+Math.cos(a)*r, cy+Math.sin(a)*r); } } 
+            else if(type===1){ ctx.arc(cx-size/4, cy+size/4, size/4, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.fillRect(cx, cy-size/2, size/6, size*0.8); ctx.moveTo(cx, cy-size/2); ctx.quadraticCurveTo(cx+size/2, cy-size/4, cx+size/2, cy+size/4); ctx.lineTo(cx+size/3, cy+size/4); ctx.quadraticCurveTo(cx+size/3, cy-size/4, cx, cy-size/4); } 
+            else if(type===2){ ctx.moveTo(cx+size/4, cy-size/2); ctx.lineTo(cx-size/2, cy+size/8); ctx.lineTo(cx-size/8, cy+size/8); ctx.lineTo(cx-size/4, cy+size/2); ctx.lineTo(cx+size/2, cy-size/8); ctx.lineTo(cx+size/8, cy-size/8); } 
+            else if(type===3){ ctx.moveTo(cx, cy-size/2); ctx.lineTo(cx+size/2, cy); ctx.lineTo(cx, cy+size/2); ctx.lineTo(cx-size/2, cy); } 
+            else if(type===4){ ctx.arc(cx, cy, size/2, 0, Math.PI*2); ctx.fill(); ctx.fillStyle = getContrast(color); ctx.beginPath(); ctx.arc(cx, cy, size/6, 0, Math.PI*2); } 
+            else if(type===5){ ctx.save(); ctx.translate(cx, cy); ctx.strokeStyle = color; ctx.lineWidth = 2; for(let i=0; i<3; i++) { ctx.rotate(Math.PI/3); ctx.beginPath(); ctx.ellipse(0, 0, size, size/3, 0, 0, Math.PI*2); ctx.stroke(); } ctx.fillStyle = getContrast(bg1); ctx.beginPath(); ctx.arc(0,0,size/5,0,Math.PI*2); ctx.fill(); ctx.restore(); } 
+            else if(type===6){ ctx.moveTo(cx-size, cy+size/2); ctx.lineTo(cx-size, cy-size/2); ctx.lineTo(cx-size/2, cy); ctx.lineTo(cx, cy-size); ctx.lineTo(cx+size/2, cy); ctx.lineTo(cx+size, cy-size/2); ctx.lineTo(cx+size, cy+size/2); } 
+            else if(type===7){ ctx.moveTo(cx-size, cy+size); ctx.quadraticCurveTo(cx, cy, cx+size, cy-size); ctx.quadraticCurveTo(cx+size/2, cy+size/2, cx-size, cy+size); }
+            else if(type===8){ ctx.moveTo(cx, cy - size/2); ctx.bezierCurveTo(cx + size/3, cy - size/2, cx + size/2, cy - size/4, cx + size/2, cy); ctx.lineTo(cx + size/2.5, cy + size/6); ctx.lineTo(cx + size/2, cy + size/3); ctx.lineTo(cx + size/3, cy + size/2); ctx.lineTo(cx - size/2, cy + size/2); ctx.lineTo(cx - size/2, cy - size/2); }
+            else if(type===9){ for(let i=0; i<16; i++) { let r = (i%2===0) ? size : size*0.7; let a = (i/16)*Math.PI*2; ctx.lineTo(cx + Math.cos(a)*r, cy + Math.sin(a)*r); } }
+            ctx.fill();
+        };
+
+        // --- LAYER 1: BG ---
+        ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2;
+        if(bgStyle===1){ ctx.fillRect(0,50,256,50); } 
+        else if(bgStyle===2){ ctx.fillRect(128,0,128,100); } 
+        else if(bgStyle===3){ ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(256,0); ctx.lineTo(256,100); ctx.fill(); } 
+        else if(bgStyle===4){ for(let i=0; i<100; i+=25) ctx.fillRect(0,i,256,12.5); } 
+        else if(bgStyle===5){ for(let ix=0; ix<256; ix+=20) for(let iy=0; iy<100; iy+=20) if((ix/20 + iy/20)%2==0) ctx.fillRect(ix,iy,20,20); } 
+        else if(bgStyle===6){ for(let ix=15; ix<256; ix+=30) for(let iy=15; iy<100; iy+=30) { ctx.beginPath(); ctx.arc(ix,iy,6,0,Math.PI*2); ctx.fill(); } } 
+        else if(bgStyle===7){ ctx.beginPath(); for(let i=0; i<24; i++){ ctx.moveTo(128,50); ctx.lineTo(128+Math.cos(i*Math.PI/12)*200, 50+Math.sin(i*Math.PI/12)*200); ctx.lineTo(128+Math.cos((i+0.5)*Math.PI/12)*200, 50+Math.sin((i+0.5)*Math.PI/12)*200); } ctx.fill(); } 
+        else if(bgStyle===8){ ctx.fillRect(0,0,85,100); ctx.fillStyle=acc1; ctx.fillRect(171,0,85,100); } 
+        else if(bgStyle===9){ ctx.beginPath(); ctx.moveTo(0,100); ctx.lineTo(0,50); for(let i=0; i<=256; i+=10) ctx.lineTo(i, 50 + Math.sin(i/20)*15); ctx.lineTo(256,100); ctx.fill(); } 
+        else if(bgStyle===10){ ctx.beginPath(); for(let i=0; i<36; i++){ ctx.moveTo(128,50); ctx.lineTo(128+Math.cos(i*Math.PI/18)*200, 50+Math.sin(i*Math.PI/18)*200); ctx.lineTo(128+Math.cos((i+0.5)*Math.PI/18)*200, 50+Math.sin((i+0.5)*Math.PI/18)*200); } ctx.fill(); } 
+        else if(bgStyle===11){ ctx.lineWidth=10; ctx.strokeStyle=bg2; for(let i=10; i<200; i+=25){ ctx.beginPath(); ctx.moveTo(128, 50-i); ctx.lineTo(128+i, 50); ctx.lineTo(128, 50+i); ctx.lineTo(128-i, 50); ctx.closePath(); ctx.stroke(); } } 
+        else if(bgStyle===12){ ctx.fillStyle=bg2; ctx.fillRect(0,20,256,20); ctx.fillStyle=acc1; ctx.fillRect(0,60,256,20); } 
+        else if(bgStyle===13){ ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(128,0); ctx.lineTo(0,100); ctx.fill(); ctx.fillStyle=acc1; ctx.beginPath(); ctx.moveTo(256,100); ctx.lineTo(128,100); ctx.lineTo(256,0); ctx.fill(); } 
+        else if(bgStyle===14){ for(let ix=10; ix<256; ix+=15) for(let iy=10; iy<100; iy+=15) { ctx.beginPath(); ctx.arc(ix,iy,(ix/256)*6,0,Math.PI*2); ctx.fill(); } }
+        else if(bgStyle===15){ ctx.fillStyle=bg2; ctx.fillRect(0,30,256,40); }
+        else if(bgStyle===16){ ctx.fillStyle=acc1; ctx.fillRect(0,0,60,100); ctx.fillStyle=bg2; ctx.fillRect(60,0,196,100); }
+        else if(bgStyle===17){ ctx.beginPath(); ctx.moveTo(0,50); ctx.quadraticCurveTo(128, 0, 256, 50); ctx.lineTo(256,100); ctx.lineTo(0,100); ctx.fill(); }
+        else if(bgStyle===18){ ctx.fillStyle=bg2; ctx.fillRect(0,0,256,20); ctx.fillRect(0,80,256,20); }
+        else if(bgStyle===19){ ctx.fillStyle=bg2; for(let i=0; i<100; i+=10) ctx.fillRect(0,i,30,5); }
+        else if(bgStyle===20){ ctx.fillStyle=bg2; ctx.fillRect(0,0,40,100); ctx.fillStyle=acc1; for(let i=5; i<100; i+=15) ctx.fillRect(5,i,30,5); }
+        else if(bgStyle===21){ ctx.fillStyle=bg1; ctx.fillRect(0,0,256,50); ctx.fillStyle=bg2; ctx.fillRect(0,50,256,50); }
+        else if(bgStyle===22){ ctx.fillStyle=bg1; ctx.fillRect(0,0,256,33); ctx.fillStyle=bg2; ctx.fillRect(0,33,256,34); ctx.fillStyle=acc1; ctx.fillRect(0,67,256,33); }
+        else if(bgStyle===23){ ctx.fillStyle=bg2; ctx.beginPath(); ctx.ellipse(128, 50, 140, 60, 0, 0, Math.PI*2); ctx.fill(); }
+        else if(bgStyle===24){ ctx.fillStyle=bg2; for(let ix=0; ix<=256; ix+=40) for(let iy=0; iy<=100; iy+=40) { ctx.beginPath(); ctx.moveTo(ix, iy-20); ctx.lineTo(ix+20, iy); ctx.lineTo(ix, iy+20); ctx.lineTo(ix-20, iy); ctx.fill(); } }
+        else if(bgStyle===25){ ctx.fillStyle=bg2; ctx.fillRect(0,0,50,100); ctx.fillStyle=bg1; ctx.fillRect(50,0,206,100); }
+        else if(bgStyle===26){ ctx.fillStyle=bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle=bg2; ctx.beginPath(); for(let i=-100; i<350; i+=30) { ctx.moveTo(i, 0); ctx.lineTo(i+15, 0); ctx.lineTo(i-85, 100); ctx.lineTo(i-100, 100); } ctx.fill(); }
+        else if(bgStyle===27){ ctx.fillStyle=bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle=acc1; ctx.fillRect(0,0,256,25); ctx.fillRect(0,75,256,25); }
+        else if(bgStyle===28){ ctx.fillStyle=bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle=bg2; ctx.beginPath(); ctx.arc(40, 50, 45, 0, Math.PI*2); ctx.fill(); }
+        else if(bgStyle===29){ ctx.fillStyle=bg1; ctx.fillRect(0,0,256,30); ctx.fillStyle=acc2; ctx.fillRect(0,30,256,70); }
+
+        // --- LAYER 2: DECOR ---
+        if(decorStyle===1){ ctx.globalAlpha=0.2; drawIcon(0, 128, 50, 80, acc1); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===2){ ctx.globalAlpha=0.15; drawAdvText(song.code, 128, 50, "bold 90px Arial", tc1, 'center'); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===3){ drawIcon(4, 128, 50, 90, bg2===bg1 ? acc1 : bg2); } 
+        else if(decorStyle===4){ ctx.globalAlpha=0.15; drawAdvText(song.artist.toUpperCase(), 128, 50, "60px " + fDisp, tc1, 'center'); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===5){ ctx.globalAlpha=0.4; for(let i=0; i<5; i++) drawIcon(1, 20+rndInt(216), 20+rndInt(60), 15+rndInt(15), acc2); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===6){ drawIcon(3, 64, 50, 40, acc1); drawIcon(3, 192, 50, 40, acc2); } 
+        else if(decorStyle===7){ ctx.globalAlpha=0.3; drawIcon(2, 128, 50, 80, acc1); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===8){ ctx.strokeStyle=acc2; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(128,50,40,0,Math.PI*2); ctx.stroke(); ctx.beginPath(); ctx.arc(128,50,30,0,Math.PI*2); ctx.stroke(); } 
+        else if(decorStyle===9){ ctx.fillStyle=acc1; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(40,0); ctx.lineTo(0,40); ctx.fill(); ctx.beginPath(); ctx.moveTo(256,100); ctx.lineTo(216,100); ctx.lineTo(256,60); ctx.fill(); } 
+        else if(decorStyle===10){ drawIcon(5, 128, 50, 60, acc2); } 
+        else if(decorStyle===11){ ctx.globalAlpha=0.5; drawIcon(7, 60, 50, 30, acc1); drawIcon(7, 190, 30, 40, bg2); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===12){ drawIcon(6, 128, 50, 60, acc1); } 
+        else if(decorStyle===13){ ctx.fillStyle=acc2; ctx.globalAlpha=0.4; ctx.fillRect(20, 20, 40, 40); ctx.beginPath(); ctx.arc(200, 70, 25, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===14){ ctx.strokeStyle=acc1; ctx.lineWidth=4; ctx.beginPath(); ctx.moveTo(0,50); for(let i=0; i<256; i+=20) ctx.lineTo(i, (i%40===0)?20:80); ctx.stroke(); }
+        else if(decorStyle===15){ drawIcon(1, 30, 50, 40, acc1); drawIcon(1, 45, 60, 20, acc2); }
+        else if(decorStyle===16){ ctx.globalAlpha=0.15; drawAdvText(song.titleA.charAt(0), 128, 50, "bold 120px " + fDisp, tc1, 'center'); ctx.globalAlpha=1.0; }
+        else if(decorStyle===17){ ctx.fillStyle=acc2; ctx.fillRect(10, 48, 236, 4); }
+        else if(decorStyle===18){ drawIcon(5, 40, 50, 45, acc1); ctx.fillRect(80, 49, 150, 2); }
+        else if(decorStyle===19){ for(let ix=5; ix<40; ix+=8) for(let iy=5; iy<95; iy+=8) { ctx.fillStyle = ((ix+iy)%16==0) ? acc1 : acc2; ctx.beginPath(); ctx.arc(ix,iy,3,0,Math.PI*2); ctx.fill(); } }
+        else if(decorStyle===20){ ctx.fillStyle=acc1; ctx.fillRect(0,0,70,100); drawIcon(8, 35, 50, 30, acc2); } 
+        else if(decorStyle===21){ ctx.fillStyle=bg2; ctx.beginPath(); ctx.moveTo(40,30); ctx.lineTo(216,30); ctx.arc(216, 50, 20, -Math.PI/2, Math.PI/2); ctx.lineTo(40, 70); ctx.arc(40, 50, 20, Math.PI/2, -Math.PI/2); ctx.fill(); } 
+        else if(decorStyle===22){ ctx.fillStyle=acc2; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(30,0); ctx.lineTo(0,30); ctx.fill(); ctx.beginPath(); ctx.moveTo(256,0); ctx.lineTo(226,0); ctx.lineTo(256,30); ctx.fill(); ctx.beginPath(); ctx.moveTo(0,100); ctx.lineTo(30,100); ctx.lineTo(0,70); ctx.fill(); ctx.beginPath(); ctx.moveTo(256,100); ctx.lineTo(226,100); ctx.lineTo(256,70); ctx.fill(); } 
+        else if(decorStyle===23){ ctx.globalAlpha=0.6; drawIcon(9, 210, 50, 35, acc1); ctx.globalAlpha=1.0; } 
+        else if(decorStyle===24){ ctx.fillStyle=acc1; ctx.fillRect(0, 25, 256, 4); ctx.fillRect(0, 71, 256, 4); } 
+        else if(decorStyle===25){ ctx.fillStyle=acc1; for(let y=10; y<100; y+=10) { ctx.beginPath(); ctx.arc(60, y, 2, 0, Math.PI*2); ctx.fill(); } }
+        else if(decorStyle===26){ ctx.fillStyle=acc2; ctx.beginPath(); ctx.arc(0,0,20,0,Math.PI/2); ctx.lineTo(0,0); ctx.fill(); ctx.beginPath(); ctx.arc(256,0,20,Math.PI/2,Math.PI); ctx.lineTo(256,0); ctx.fill(); ctx.beginPath(); ctx.arc(0,100,20,-Math.PI/2,0); ctx.lineTo(0,100); ctx.fill(); ctx.beginPath(); ctx.arc(256,100,20,Math.PI,Math.PI*1.5); ctx.lineTo(256,100); ctx.fill(); }
+        else if(decorStyle===27){ ctx.fillStyle=acc1; for(let r=0; r<3; r++) { for(let c=0; c<3; c++) { if((r+c)%2===0) ctx.fillRect(10+c*10, 35+r*10, 10, 10); } } }
+        else if(decorStyle===28){ ctx.fillStyle=acc2; ctx.beginPath(); ctx.moveTo(200, 20); ctx.lineTo(230, 50); ctx.lineTo(200, 80); ctx.fill(); }
+        else if(decorStyle===29){ ctx.fillStyle=acc1; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(80, 50); ctx.lineTo(0, 100); ctx.fill(); }
+
+        // --- LAYER 3: BORDERS ---
+        let cBg = bg1; 
+        if(borderStyle===1){ ctx.strokeStyle=acc1; ctx.lineWidth=4; ctx.strokeRect(4,4,248,92); } else if(borderStyle===2){ ctx.strokeStyle=acc1; ctx.lineWidth=3; ctx.strokeRect(3,3,250,94); ctx.strokeStyle=tc1; ctx.lineWidth=1; ctx.strokeRect(8,8,240,84); } else if(borderStyle===3){ ctx.strokeStyle=acc2; ctx.lineWidth=2; ctx.setLineDash([5,5]); ctx.strokeRect(6,6,244,88); ctx.setLineDash([]); } else if(borderStyle===4){ ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fillRect(15,15,226,70); cBg='#ffffff'; } else if(borderStyle===5){ ctx.fillStyle='rgba(0,0,0,0.85)'; ctx.fillRect(15,15,226,70); cBg='#000000'; } else if(borderStyle===6){ ctx.fillStyle=acc1; ctx.fillRect(0,0,256,15); ctx.fillRect(0,85,256,15); } else if(borderStyle===7){ ctx.fillStyle=acc2; ctx.fillRect(0,0,15,100); ctx.fillRect(241,0,15,100); } else if(borderStyle===8){ ctx.strokeStyle=tc1; ctx.lineWidth=2; ctx.strokeRect(10,10,236,80); ctx.strokeStyle=acc1; ctx.strokeRect(12,12,236,80); }
+
+        const mTxt = getContrast(cBg); const aTxt = (mTxt === '#ffffff') ? acc1 : acc2; 
+
+        // --- LAYER 4: TYPO ---
+        const tA = song.titleA.toUpperCase(); const tB = song.titleB.toUpperCase(); const art = song.artist; const cd = song.code;
+        const boxCode = (bx, by, bw, bh) => { ctx.fillStyle=aTxt; ctx.fillRect(bx,by,bw,bh); drawAdvText(cd, bx+bw/2, by+bh/2, "bold 14px Arial", getContrast(aTxt), 'center'); };
+
+        if(layoutStyle===0){ boxCode(5, 5, 30, 25); drawAdvText(tA, 128, 30, "22px " + fDisp, mTxt, 'center'); drawAdvText("by " + art, 128, 55, "18px " + fScrpt, aTxt, 'center'); drawAdvText(tB, 128, 80, "22px " + fDisp, mTxt, 'center'); } 
+        else if(layoutStyle===1){ drawAdvText(tA, 64, 40, "20px " + fDisp, getContrast(bg1), 'center', 1, 1.2); drawAdvText(tB, 192, 40, "20px " + fDisp, getContrast((bgStyle===1||bgStyle===2)?bg2:bg1), 'center', 1, 1.2); ctx.fillStyle=mTxt; ctx.fillRect(0, 75, 256, 25); drawAdvText(art + "  [" + cd + "]", 128, 87, "14px " + fInfo, getContrast(mTxt), 'center'); } 
+        else if(layoutStyle===2){ drawAdvText(art, 128, 40, "36px " + fScrpt, mTxt, 'center', 1, 1.2, -0.05); drawAdvText(tA + " / " + tB, 128, 80, "16px " + fInfo, aTxt, 'center'); boxCode(220, 5, 30, 30); } 
+        else if(layoutStyle===3){ drawAdvText(tA, 128, 45, "32px " + fDisp, mTxt, 'center', 1, 1.5); drawAdvText(art + " • " + tB, 128, 85, "12px " + fInfo, aTxt, 'center'); drawAdvText(cd, 20, 20, "bold 16px " + fInfo, mTxt, 'center'); } 
+        else if(layoutStyle===4){ drawAdvText(tA, 64, 30, "20px " + fDisp, getContrast(bg1), 'center'); drawAdvText(cd, 192, 30, "30px " + fDisp, getContrast((bgStyle===2||bgStyle===8)?bg2:bg1), 'center'); drawAdvText(art, 64, 75, "16px " + fScrpt, getContrast(bg1), 'center'); drawAdvText(tB, 192, 75, "20px " + fDisp, getContrast((bgStyle===2||bgStyle===8)?bg2:bg1), 'center'); } 
+        else if(layoutStyle===5){ ctx.save(); ctx.translate(128,50); ctx.rotate(-0.08); drawAdvText(tA, 0, -20, "24px " + fDisp, mTxt, 'center'); drawAdvText(art, 0, 5, "18px " + fScrpt, aTxt, 'center'); drawAdvText(tB, 0, 30, "16px " + fInfo, mTxt, 'center'); ctx.restore(); boxCode(5, 65, 35, 30); } 
+        else if(layoutStyle===6){ ctx.fillStyle = aTxt; ctx.fillRect(0,0,60,100); drawAdvText(cd, 30, 25, "bold 24px " + fInfo, getContrast(aTxt), 'center'); drawAdvText(art, -50, 30, "14px " + fInfo, getContrast(aTxt), 'center', 1, 1, -Math.PI/2); drawAdvText(tA, 158, 35, "22px " + fDisp, mTxt, 'center'); drawAdvText(tB, 158, 65, "22px " + fDisp, mTxt, 'center'); } 
+        else if(layoutStyle===7){ drawIcon(0, 30, 50, 15, aTxt); drawIcon(0, 226, 50, 15, aTxt); drawAdvText(tA, 128, 25, "20px " + fDisp, mTxt, 'center', 1, 1.2); drawAdvText("STAR: " + art, 128, 50, "12px " + fInfo, aTxt, 'center'); drawAdvText(tB, 128, 75, "20px " + fDisp, mTxt, 'center', 1, 1.2); } 
+        else if(layoutStyle===8){ drawAdvText(tA, 128, 30, "26px " + fScrpt, mTxt, 'center'); drawAdvText("by " + art, 128, 65, "20px " + fScrpt, aTxt, 'center'); drawAdvText(cd, 20, 80, "16px " + fInfo, mTxt, 'center'); } 
+        else if(layoutStyle===9){ drawAdvText(tA, 128, 25, "24px " + fDisp, mTxt, 'center', 1.5, 0.8); drawAdvText(art, 128, 55, "18px " + fInfo, aTxt, 'center', 1.2, 0.8); drawAdvText(tB, 128, 80, "24px " + fDisp, mTxt, 'center', 1.5, 0.8); boxCode(0,0, 30, 20); } 
+        else if(layoutStyle===10){ drawAdvText(tA, 128, 30, "26px " + fDisp, mTxt, 'center', 1, 1, 0, true); drawAdvText(art, 128, 70, "18px " + fScrpt, aTxt, 'center', 1, 1, 0, true); drawAdvText(cd, 230, 20, "14px " + fInfo, mTxt, 'center'); } 
+        else if(layoutStyle===11){ ctx.fillStyle = mTxt; ctx.fillRect(20, 20, 216, 25); ctx.fillRect(50, 55, 156, 25); drawAdvText(tA, 128, 32, "18px " + fDisp, getContrast(mTxt), 'center'); drawAdvText(art, 128, 67, "16px " + fInfo, getContrast(mTxt), 'center'); } 
+        else if(layoutStyle===12){ ctx.fillStyle = aTxt; ctx.beginPath(); ctx.arc(128, 50, 25, 0, Math.PI*2); ctx.fill(); drawAdvText(cd, 128, 50, "bold 18px " + fInfo, getContrast(aTxt), 'center'); drawAdvText(tA, 55, 50, "20px " + fDisp, mTxt, 'center'); drawAdvText(tB, 201, 50, "20px " + fDisp, mTxt, 'center'); } 
+        else if(layoutStyle===13){ ctx.fillStyle = aTxt; ctx.beginPath(); ctx.moveTo(200,0); ctx.lineTo(256,0); ctx.lineTo(256,56); ctx.fill(); ctx.save(); ctx.translate(235, 20); ctx.rotate(Math.PI/4); drawAdvText(cd, 0, 0, "bold 12px Arial", getContrast(aTxt), 'center'); ctx.restore(); drawAdvText(tA, 110, 40, "24px " + fScrpt, mTxt, 'center'); drawAdvText(art, 110, 70, "14px " + fInfo, mTxt, 'center'); } 
+        else if(layoutStyle===14){ ctx.fillStyle = '#111'; ctx.fillRect(0,0,128,100); ctx.fillStyle = '#eee'; ctx.fillRect(128,0,128,100); drawAdvText(tA, 64, 40, "20px " + fDisp, '#eee', 'center'); drawAdvText(tB, 192, 40, "20px " + fDisp, '#111', 'center'); ctx.fillStyle = acc1; ctx.fillRect(80, 75, 96, 25); drawAdvText(art, 128, 87, "14px " + fInfo, getContrast(acc1), 'center'); drawAdvText(cd, 15, 15, "bold 12px Arial", '#eee', 'left'); }
+        else if(layoutStyle===15){ drawAdvText(tA, 128, 40, "40px " + fDisp, mTxt, 'center', 1, 1.4); drawAdvText(art + " • " + cd, 240, 85, "12px " + fInfo, aTxt, 'right'); }
+        else if(layoutStyle===16){ ctx.fillStyle = aTxt; ctx.fillRect(0,0,60,100); drawAdvText(cd, 30, 50, "bold 20px " + fInfo, getContrast(aTxt), 'center'); drawAdvText(tA, 70, 30, "22px " + fDisp, mTxt, 'left'); drawAdvText(art, 70, 60, "16px " + fScrpt, aTxt, 'left'); drawAdvText(tB, 70, 85, "14px " + fDisp, mTxt, 'left'); }
+        else if(layoutStyle===17){ drawAdvText(tA, 130, 42, "28px " + fDisp, '#000000', 'center', 1, 1); drawAdvText(tA, 128, 40, "28px " + fDisp, mTxt, 'center', 1, 1); drawAdvText("BY " + art, 128, 75, "16px " + fInfo, aTxt, 'center'); boxCode(10, 10, 35, 20); }
+        else if(layoutStyle===18){ drawAdvText(art, 128, 20, "14px " + fInfo, aTxt, 'center'); ctx.fillStyle = mTxt; ctx.fillRect(20, 35, 216, 35); drawAdvText(tA, 128, 53, "24px " + fDisp, getContrast(mTxt), 'center'); drawAdvText(tB, 128, 85, "14px " + fScrpt, mTxt, 'center'); }
+        else if(layoutStyle===19){ drawAdvText(tA.charAt(0), 40, 50, "60px " + fDisp, aTxt, 'center'); drawAdvText(tA.slice(1), 75, 40, "24px " + fDisp, mTxt, 'left'); drawAdvText(art, 75, 70, "18px " + fScrpt, mTxt, 'left'); drawAdvText(cd, 240, 20, "12px Arial", aTxt, 'right'); }
+        else if(layoutStyle===20){ boxCode(10, 10, 35, 20); drawAdvText(tA, 240, 40, "24px " + fDisp, mTxt, 'right', 1, 1.2); drawAdvText(art, 240, 75, "16px " + fScrpt, aTxt, 'right'); }
+        else if(layoutStyle===21){ drawAdvText(tA.split(' ')[0], 40, 35, "26px " + fDisp, mTxt, 'left'); drawAdvText(tA.split(' ').slice(1).join(' ') || "HIT", 216, 65, "26px " + fDisp, mTxt, 'right'); drawAdvText(cd + " • " + art, 128, 50, "12px " + fInfo, aTxt, 'center'); }
+        else if(layoutStyle===22){ drawAdvText(art + " [" + cd + "]", 128, 25, "14px " + fInfo, aTxt, 'center'); drawAdvText(tA, 128, 65, "36px " + fDisp, mTxt, 'center', 1, 1.5); }
+        else if(layoutStyle===23){ ctx.strokeStyle = mTxt; ctx.lineWidth = 1.5; ctx.font = "30px " + fDisp; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.strokeText(tA, 128, 40, 240); drawAdvText(art, 128, 75, "16px " + fScrpt, aTxt, 'center'); drawAdvText(cd, 20, 20, "12px Arial", mTxt, 'center'); }
+        else if(layoutStyle===24){ drawAdvText(tA, 128, 35, "28px " + fDisp, mTxt, 'center', 1.2, 1); ctx.fillStyle = aTxt; ctx.fillRect(64, 65, 128, 20); drawAdvText(art, 128, 75, "14px " + fInfo, getContrast(aTxt), 'center'); boxCode(210, 70, 35, 20); }
+        else if(layoutStyle===25){ drawAdvText(art, 128, 20, "14px " + fInfo, aTxt, 'center'); drawAdvText(tA, 128, 60, "40px " + fDisp, mTxt, 'center', 1, 1.2); drawAdvText(cd, 25, 85, "12px Arial", mTxt, 'left'); }
+        else if(layoutStyle===26){ drawAdvText(cd, 25, 50, "bold 16px " + fInfo, getContrast(bgStyle===25?bg2:bg1), 'center', 1, 1, -Math.PI/2); drawAdvText(tA, 150, 35, "26px " + fDisp, mTxt, 'center'); drawAdvText(art, 150, 70, "16px " + fScrpt, aTxt, 'center'); }
+        else if(layoutStyle===27){ drawAdvText(tA, 128, 25, "18px " + fDisp, mTxt, 'center'); drawAdvText(tB, 128, 50, "18px " + fDisp, mTxt, 'center'); drawAdvText(art, 128, 75, "18px " + fScrpt, aTxt, 'center'); }
+        else if(layoutStyle===28){ drawAdvText(art, 128, 25, "16px " + fScrpt, aTxt, 'center'); drawAdvText(tA, 128, 70, "36px " + fDisp, mTxt, 'center', 1.2, 1); }
+        else if(layoutStyle===29){ ctx.fillStyle=aTxt; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(216,40); ctx.arc(216,50,10,-Math.PI/2,Math.PI/2); ctx.lineTo(40,60); ctx.arc(40,50,10,Math.PI/2,-Math.PI/2); ctx.fill(); drawAdvText(tA, 128, 50, "18px " + fDisp, getContrast(aTxt), 'center'); drawAdvText(art, 128, 80, "14px " + fInfo, mTxt, 'center'); drawAdvText(cd, 128, 20, "14px Arial", mTxt, 'center'); }
+
+        // Add subtle paper-like noise texture overlay
+        for (let i = 0; i < 1500; i++) {
+            ctx.fillStyle = (i % 2 === 0) ? '#000000' : '#ffffff';
+            ctx.globalAlpha = rnd() * 0.04;
+            ctx.fillRect(rndInt(256), rndInt(100), 1.5, 1.5);
+        }
+        ctx.globalAlpha = 1.0;
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        texture.minFilter = THREE.LinearFilter;
+        return { texture, accent: acc1, bg: bg1, alt: acc2 };
+    }
+
+    function populateJukebox() {
+        let songIndex = 0;
+        const cardGeo = new THREE.PlaneGeometry(CARD_W, CARD_H);
+
+        for (let c = 0; c < COLS; c++) {
+            const theta = -ANGLE_RANGE / 2 + c * COL_ANGLE + COL_ANGLE / 2;
+            
+            const catCanvas = document.createElement('canvas');
+            catCanvas.width = 256; catCanvas.height = 64;
+            const cctx = catCanvas.getContext('2d');
+            cctx.fillStyle = '#006666'; cctx.fillRect(0, 0, 256, 64);
+            cctx.fillStyle = '#ffffff'; cctx.font = "bold 28px 'Oswald', sans-serif";
+            cctx.textAlign = 'center'; cctx.textBaseline = 'middle';
+            const categories = ["extended play", "varieties", "your picks", "favorites", "soul", "popular", "hit tunes", "jazz", "country", "rock & roll"];
+            cctx.fillText(categories[c % categories.length].toUpperCase(), 128, 32);
+            
+            const catMesh = new THREE.Mesh(new THREE.PlaneGeometry(CARD_W * 0.9, 0.6), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(catCanvas) }));
+            catMesh.position.set(Math.sin(theta) * (R + 0.1), -startY - ROW_SPACING, Math.cos(theta) * (R + 0.1));
+            catMesh.rotation.y = theta;
+            jukeboxGroup.add(catMesh);
+
+            for (let r = 0; r < ROWS; r++) {
+                if (songIndex >= playlist.length) break;
+                
+                const song = playlist[songIndex];
+                const { texture: tex, accent: accColor, bg: bgColor, alt: altColor } = generateCardTexture(song);
+                
+                // Diffuse paper material that softly catches the LED light
+                const mat = new THREE.MeshStandardMaterial({ 
+                    map: tex, 
+                    roughness: 0.85, 
+                    metalness: 0.0 
+                });
+                
+                const card = new THREE.Mesh(cardGeo, mat);
+                card.castShadow = true;
+                card.receiveShadow = true;
+                
+                const x = Math.sin(theta) * (R + 0.05);
+                const z = Math.cos(theta) * (R + 0.05);
+                const y = startY - r * ROW_SPACING;
+                
+                card.position.set(x, y, z);
+                card.rotation.y = theta; 
+                
+                // Added baseY to userData to align the frame LEDs perfectly
+                card.userData = { isCard: true, song: song, baseZ: z, baseX: x, baseY: y, theta: theta, accentColor: accColor, bgColor: bgColor, altColor: altColor };
+                
+                jukeboxGroup.add(card);
+                cards.push(card);
+                songIndex++;
+            }
+        }
+    }
+
+    document.fonts.ready.then(() => {
+        populateJukebox();
+        const np = document.getElementById('now-playing');
+        document.getElementById('np-text').innerText = "Select a Track";
+        np.classList.add('idle'); 
+    });
+
+    // --- INTERACTION ---
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    function onPointerDown(event) {
+        initAudio(); 
+        if (event.touches) {
+            mouse.x = (event.touches[0].clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.touches[0].clientY / window.innerHeight) * 2 + 1;
+        } else {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        }
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(cards);
+        if (intersects.length > 0) selectCard(intersects[0].object);
+    }
+
+    function selectCard(card) {
+        if (activeCard === card) {
+            // Deselect card and turn off
+            activeCard = null;
+            document.getElementById('now-playing').classList.add('idle');
+            return;
+        }
+        
+        playSelectionSound();
+        activeCard = card;
+
+        const np = document.getElementById('now-playing');
+        np.classList.remove('idle');
+        document.getElementById('np-text').innerText = `♫ [${card.userData.song.code}] ${card.userData.song.titleA} - ${card.userData.song.artist} ♫`;
+
+        // Snap the LEDs instantly to the top and bottom edges of the newly selected card
+        const data = card.userData;
+        const yTop = data.baseY + CARD_H / 2 - 0.02; 
+        const yBot = data.baseY - CARD_H / 2 + 0.02;
+        
+        localLed1.position.set(Math.sin(data.theta) * (R + 0.14), yTop, Math.cos(data.theta) * (R + 0.14));
+        localLed1.rotation.y = data.theta; // Align horizontal cylinder parallel to card face
+        
+        localLed2.position.set(Math.sin(data.theta) * (R + 0.14), yBot, Math.cos(data.theta) * (R + 0.14));
+        localLed2.rotation.y = data.theta;
+        
+        // Reset light intensities so they smoothly fade up in the new position
+        localLed1.intensity = 0;
+        localLed2.intensity = 0;
+        ledMat.color.setHex(0x111111);
+    }
+
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- ANIMATION & ROLLER RINK LIGHTING LOOP ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        // Smoothly constrain vertical tilt when zoomed in (locks to horizontal scroll only)
+        const targetMinPolar = isFitMode ? Math.PI / 6 : Math.PI / 2;
+        const targetMaxPolar = isFitMode ? Math.PI / 2 + 0.1 : Math.PI / 2;
+        
+        controls.minPolarAngle += (targetMinPolar - controls.minPolarAngle) * 0.1;
+        controls.maxPolarAngle += (targetMaxPolar - controls.maxPolarAngle) * 0.1;
+        
+        // Safely prevent min from exceeding max during the smooth transition
+        if (controls.minPolarAngle > controls.maxPolarAngle) {
+            controls.minPolarAngle = controls.maxPolarAngle;
+        }
+
+        controls.update();
+
+        // Dynamically push the fog back based on camera distance so the jukebox is NEVER grey/fogged!
+        const distToCenter = camera.position.length();
+        scene.fog.near = distToCenter + 30; // Fog strictly starts behind the drum
+        scene.fog.far = distToCenter + 250; // Smoothly fades out the distant floor
+
+        // 0. Auto-Fit / Telephoto Zoom Logic
+        if (isAutoTransitioning) {
+            // Dynamically Lerp the Camera's Focal Length (Field of View)
+            // 45 = Wide Angle (exaggerates 3D curve), 12 = Telephoto (flattens perspective)
+            const targetFOV = isFitMode ? 45 : 12;
+            camera.fov += (targetFOV - camera.fov) * 0.08;
+            camera.updateProjectionMatrix();
+
+            const vFOV = camera.fov * Math.PI / 180;
+            // Snug padding (1 unit) to ensure top and bottom rims are perfectly visible without excess space
+            const hDist = (HEIGHT_TOTAL + 1) / (2 * Math.tan(vFOV / 2));
+            const wDist = ((R * 2) + 4) / (2 * Math.tan(vFOV / 2) * camera.aspect);
+            
+            // Choose target distance based on current toggle state
+            let targetDist;
+            let targetY = 0; // Always center on Y=0 to prevent vertical cropping
+            
+            if (isFitMode) {
+                targetDist = Math.max(hDist, wDist); // Fit entire machine (width and height)
+            } else {
+                // Exactly fit the column height, letting the sides crop for a perfect close-up read
+                targetDist = hDist; 
+            }
+            
+            // Maintain current rotational side, but smoothly pull in/out
+            const currentAzimuth = controls.getAzimuthalAngle();
+            const targetX = Math.sin(currentAzimuth) * (R + targetDist);
+            const targetZ = Math.cos(currentAzimuth) * (R + targetDist);
+            
+            const targetPos = new THREE.Vector3(targetX, targetY, targetZ);
+            camera.position.lerp(targetPos, 0.08);
+            controls.target.lerp(new THREE.Vector3(0, targetY/2, 0), 0.08);
+            
+            // Stop transitioning once we arrive
+            if (Math.abs(camera.fov - targetFOV) < 0.5 && camera.position.distanceTo(targetPos) < 0.5) {
+                camera.fov = targetFOV;
+                camera.updateProjectionMatrix();
+                isAutoTransitioning = false; 
+            }
+        }
+        
+        // 0.5 Sync camera headlight to perfectly follow the camera's world position
+        cameraLight.position.copy(camera.position);
+        cameraLight.target.position.copy(controls.target);
+        
+        const t = clock.getElapsedTime();
+        let tColor1 = new THREE.Color();
+        let tColor2 = new THREE.Color();
+
+        // 1. Scene Lighting Transition
+        if (isClassicLighting) {
+            // Static, bright 50s Diner layout for maximal readability
+            tColor1.setHex(0xffeedd); 
+            tColor2.setHex(0xaaeeff); 
+            
+            // ZOOMED OUT (isFitMode = true): Beautiful 3D shadows, rich depth.
+            // ZOOMED IN (isFitMode = false): Turn OFF main shadows, blast Ambient + Camera light for pure, flat, ultra-readable cards!
+            const targetHemi = isFitMode ? 0.45 : 0.0;
+            const targetDir = isFitMode ? 0.75 : 0.0; // Shadows OFF when zoomed in!
+            
+            // Reduced zoomed-in brightness from 1.6 / 0.8 to prevent washing out lighter cards
+            const targetAmbient = isFitMode ? 0.0 : 1.2; 
+            const targetCamLight = isFitMode ? 0.0 : 0.4; 
+            
+            hemiLight.intensity += (targetHemi - hemiLight.intensity) * 0.05;
+            dirLight.intensity += (targetDir - dirLight.intensity) * 0.05;
+            ambientLight.intensity += (targetAmbient - ambientLight.intensity) * 0.05;
+            cameraLight.intensity += (targetCamLight - cameraLight.intensity) * 0.05;
+        } else {
+            if (activeCard) {
+                // Lock into a slow, pulsating blend of the selected card's colors
+                const c1 = new THREE.Color(activeCard.userData.accentColor);
+                const c2 = new THREE.Color(activeCard.userData.bgColor);
+                const c3 = new THREE.Color(activeCard.userData.altColor || '#ffffff');
+                
+                const cycle = (Math.sin(t * 1.5) + 1) / 2;
+                tColor1.lerpColors(c1, c2, cycle);
+                tColor2.lerpColors(c2, c3, 1.0 - cycle);
+
+                // Roller Rink Active: 
+                const targetHemi = isFitMode ? 0.1 : 0.0;
+                const targetDir = isFitMode ? 0.1 : 0.0;
+                const targetAmbient = isFitMode ? 0.0 : 0.8; // Bright enough to read, moody
+                const targetCamLight = isFitMode ? 0.0 : 0.4;
+
+                hemiLight.intensity += (targetHemi - hemiLight.intensity) * 0.05;
+                dirLight.intensity += (targetDir - dirLight.intensity) * 0.05;
+                ambientLight.intensity += (targetAmbient - ambientLight.intensity) * 0.05;
+                cameraLight.intensity += (targetCamLight - cameraLight.intensity) * 0.05;
+            } else {
+                // Full rainbow idle sweeping
+                tColor1.setHSL((t * 0.1) % 1, 0.9, 0.6);
+                tColor2.setHSL(((t * 0.1) + 0.5) % 1, 0.9, 0.6);
+                
+                // Roller Rink Idle:
+                const targetHemi = isFitMode ? 0.4 : 0.0;
+                const targetDir = isFitMode ? 0.6 : 0.0;
+                const targetAmbient = isFitMode ? 0.0 : 1.2; 
+                const targetCamLight = isFitMode ? 0.0 : 0.6;
+
+                hemiLight.intensity += (targetHemi - hemiLight.intensity) * 0.05;
+                dirLight.intensity += (targetDir - dirLight.intensity) * 0.05;
+                ambientLight.intensity += (targetAmbient - ambientLight.intensity) * 0.05;
+                cameraLight.intensity += (targetCamLight - cameraLight.intensity) * 0.05;
+            }
+        }
+
+        // Track camera azimuth so light always shines on the visible face,
+        // but keep a constant high altitude (Y=100) and distance to maintain a consistent 
+        // 45-degree downward angle. This prevents massive, dark shadows from the shelves when the camera pulls far back!
+        const currentAzimuth = controls.getAzimuthalAngle();
+        dirLight.position.set(Math.sin(currentAzimuth) * 100, 100, Math.cos(currentAzimuth) * 100);
+
+        pointLight1.color.lerp(tColor1, 0.03);
+        neonTop.material.color.lerp(tColor1, 0.03);
+        neonTop.material.emissive.lerp(tColor1, 0.03);
+
+        pointLight2.color.lerp(tColor2, 0.03);
+        neonBot.material.color.lerp(tColor2, 0.03);
+        neonBot.material.emissive.lerp(tColor2, 0.03);
+
+        // 2. Frame LED illumination fading
+        if (activeCard) {
+            // Cranked up to 5.0 to ensure they pop even against the new camera headlight
+            localLed1.intensity += (5.0 - localLed1.intensity) * 0.1;
+            localLed2.intensity += (5.0 - localLed2.intensity) * 0.1;
+            
+            // Tint the LED slightly towards the card's accent color, but keep a warm vintage yellow base
+            const targetColor = new THREE.Color(0xffd580).lerp(new THREE.Color(activeCard.userData.accentColor), 0.15);
+            ledMat.color.lerp(targetColor, 0.1);
+            localLed1.color.lerp(targetColor, 0.1);
+            localLed2.color.lerp(targetColor, 0.1);
+        } else {
+            localLed1.intensity += (0 - localLed1.intensity) * 0.1;
+            localLed2.intensity += (0 - localLed2.intensity) * 0.1;
+            ledMat.color.lerp(new THREE.Color(0x111111), 0.1);
+        }
+
+        cards.forEach(card => {
+            const data = card.userData;
+            // No physical movement, just a subtle surface glow when targeted
+            const targetEmissive = (activeCard === card) ? 0.3 : 0; 
+            card.material.emissiveIntensity += (targetEmissive - card.material.emissiveIntensity) * 0.1;
+        });
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+</script>
+</body>
+</html>
