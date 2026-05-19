@@ -1,6 +1,7 @@
 {
-  "name": "jukebox",
+  "name": "juke.sh",
   "version": "0.1.0",
+  "license": "PIF",
   "private": true,
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
@@ -8,6 +9,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "lucide-react": "^0.297.0",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

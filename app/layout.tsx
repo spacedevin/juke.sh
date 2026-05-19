@@ -1,3 +1,5 @@
+import { Github, Heart } from 'lucide-react';
+
 export const metadata = { title: 'Jukebox' };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -8,6 +10,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Courier+Prime:wght@400;700&family=Fjalla+One&family=Impact&family=JetBrains+Mono:wght@400;500;700&family=Oswald:wght@500;700&family=Righteous&family=Pacifico&family=Lobster&family=Fascinate&family=Limelight&family=Poiret+One&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Monoton&family=Bungee&family=Rampart+One&family=Cinzel:wght@700&family=Playfair+Display:wght@900&family=Abril+Fatface&family=Rubik+Mono+One&family=Bangers&display=swap"
           rel="stylesheet"
         />
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<link rel="icon" type="image/png" sizes="192x192" href="/android-chrome-192x192.png" />
+<link rel="icon" type="image/png" sizes="512x512" href="/android-chrome-512x512.png" />
+<meta name="theme-color" content="#ffffff" />
         <style>{`
           html, body {
             margin: 0;
@@ -50,9 +59,53 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             animation: sp 0.9s linear infinite;
           }
           @keyframes sp { to { transform: rotate(360deg); } }
+
+          .site-footer {
+            position: fixed;
+            bottom: 8px;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            pointer-events: none;
+          }
+          .site-footer a {
+            pointer-events: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: rgba(255,255,255,0.45);
+            text-decoration: none;
+            padding: 4px 10px;
+            border-radius: 999px;
+            transition: color 0.15s, background-color 0.15s;
+          }
+          .site-footer a:hover {
+            color: #00ff88;
+            background: rgba(0,0,0,0.4);
+          }
+          .site-footer svg { width: 12px; height: 12px; }
+          .site-footer .heart { color: #ff4d6d; }
         `}</style>
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <footer className="site-footer">
+          <a
+            href="https://github.com/spacedevin/juke.sh"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Github />
+            <span>Made with</span>
+            <Heart className="heart" fill="currentColor" />
+            <span>by space.la</span>
+          </a>
+        </footer>
+      </body>
     </html>
   );
 }
