@@ -22,7 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             margin: 0;
             background: black;
             color: #fff;
-            font-family: 'JetBrains Mono', 'Courier Prime', ui-monospace, monospace;
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
             text-align: center;
           }
           .center-screen {
@@ -30,7 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             gap: 24px; padding: 24px;
           }
-          .landing-title { font-family: 'JetBrains Mono'; font-size: 64px; letter-spacing: 4px; color: #00ff88; text-shadow: 0 0 20px rgba(0,255,136,0.4); }
+          .landing-title { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 64px; letter-spacing: 4px; color: #00ff88; text-shadow: 0 0 20px rgba(0,255,136,0.4); }
           .landing-tag { color: #888; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
           .loading-text { color: #ccc; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
           .sp-btn {
