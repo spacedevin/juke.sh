@@ -553,9 +553,9 @@ function initThree(
     ['#c0c0c0', '#ffffff', '#808080', '#000000'], ['#ffe066', '#247ba0', '#70c1b3', '#50514f'],
     ['#6b2d5c', '#f0386b', '#ff5376', '#f8c0c8'],
   ];
-  const displayFonts = ["'Anton'", "'Bebas Neue'", "'Impact'", "'Righteous'", "'Fjalla One'", "'Limelight'", "'Rampart One'", "'Rubik Mono One'", "'Abril Fatface'", "'Bungee'", "'Bangers'"];
+  const displayFonts = ["'Anton'", "'Bebas Neue'", "'Anton'", "'Righteous'", "'Fjalla One'", "'Limelight'", "'Rampart One'", "'Rubik Mono One'", "'Abril Fatface'", "'Bungee'", "'Bangers'"];
   const scriptFonts = ["'Pacifico'", "'Lobster'", "'Yellowtail'", "'Satisfy'", "'Shrikhand'", "'Permanent Marker'", "'Fascinate'"];
-  const infoFonts = ["'Courier Prime'", "'Oswald'", "'Cinzel'", "'Playfair Display'", "'Poiret One'", 'Arial'];
+  const infoFonts = ["'Courier Prime'", "'Oswald'", "'Cinzel'", "'Playfair Display'", "'Poiret One'", 'Arimo'];
 
   function getContrast(hex: string) {
     if (!hex || hex[0] !== '#') return '#000000';
@@ -638,7 +638,7 @@ function initThree(
 
     // LAYER 2: DECOR
     if (decorStyle === 1) { ctx.globalAlpha = 0.2; drawIcon(0, 128, 50, 80, acc1); ctx.globalAlpha = 1.0; }
-    else if (decorStyle === 2) { ctx.globalAlpha = 0.15; drawAdvText(song.code, 128, 50, 'bold 90px Arial', tc1, 'center'); ctx.globalAlpha = 1.0; }
+    else if (decorStyle === 2) { ctx.globalAlpha = 0.15; drawAdvText(song.code, 128, 50, 'bold 90px Arimo', tc1, 'center'); ctx.globalAlpha = 1.0; }
     else if (decorStyle === 3) { drawIcon(4, 128, 50, 90, bg2 === bg1 ? acc1 : bg2); }
     else if (decorStyle === 4) { ctx.globalAlpha = 0.15; drawAdvText(song.artist.toUpperCase(), 128, 50, '60px ' + fDisp, tc1, 'center'); ctx.globalAlpha = 1.0; }
     else if (decorStyle === 5) { ctx.globalAlpha = 0.4; for (let i = 0; i < 5; i++) drawIcon(1, 20 + rndInt(216), 20 + rndInt(60), 15 + rndInt(15), acc2); ctx.globalAlpha = 1.0; }
@@ -682,7 +682,7 @@ function initThree(
 
     // LAYER 4: TYPO
     const tA = song.titleA.toUpperCase(); const tB = song.titleB.toUpperCase(); const art = song.artist; const cd = song.code;
-    const boxCode = (bx: number, by: number, bw: number, bh: number) => { ctx.fillStyle = aTxt; ctx.fillRect(bx, by, bw, bh); drawAdvText(cd, bx + bw / 2, by + bh / 2, 'bold 14px Arial', getContrast(aTxt), 'center'); };
+    const boxCode = (bx: number, by: number, bw: number, bh: number) => { ctx.fillStyle = aTxt; ctx.fillRect(bx, by, bw, bh); drawAdvText(cd, bx + bw / 2, by + bh / 2, 'bold 14px Arimo', getContrast(aTxt), 'center'); };
 
     if (layoutStyle === 0) { boxCode(5, 5, 30, 25); drawAdvText(tA, 128, 30, '22px ' + fDisp, mTxt, 'center'); drawAdvText('by ' + art, 128, 55, '18px ' + fScrpt, aTxt, 'center'); drawAdvText(tB, 128, 80, '22px ' + fDisp, mTxt, 'center'); }
     else if (layoutStyle === 1) { drawAdvText(tA, 64, 40, '20px ' + fDisp, getContrast(bg1), 'center', 1, 1.2); drawAdvText(tB, 192, 40, '20px ' + fDisp, getContrast((bgStyle === 1 || bgStyle === 2) ? bg2 : bg1), 'center', 1, 1.2); ctx.fillStyle = mTxt; ctx.fillRect(0, 75, 256, 25); drawAdvText(art + '  [' + cd + ']', 128, 87, '14px ' + fInfo, getContrast(mTxt), 'center'); }
@@ -697,23 +697,23 @@ function initThree(
     else if (layoutStyle === 10) { drawAdvText(tA, 128, 30, '26px ' + fDisp, mTxt, 'center', 1, 1, 0, true); drawAdvText(art, 128, 70, '18px ' + fScrpt, aTxt, 'center', 1, 1, 0, true); drawAdvText(cd, 230, 20, '14px ' + fInfo, mTxt, 'center'); }
     else if (layoutStyle === 11) { ctx.fillStyle = mTxt; ctx.fillRect(20, 20, 216, 25); ctx.fillRect(50, 55, 156, 25); drawAdvText(tA, 128, 32, '18px ' + fDisp, getContrast(mTxt), 'center'); drawAdvText(art, 128, 67, '16px ' + fInfo, getContrast(mTxt), 'center'); }
     else if (layoutStyle === 12) { ctx.fillStyle = aTxt; ctx.beginPath(); ctx.arc(128, 50, 25, 0, Math.PI * 2); ctx.fill(); drawAdvText(cd, 128, 50, 'bold 18px ' + fInfo, getContrast(aTxt), 'center'); drawAdvText(tA, 55, 50, '20px ' + fDisp, mTxt, 'center'); drawAdvText(tB, 201, 50, '20px ' + fDisp, mTxt, 'center'); }
-    else if (layoutStyle === 13) { ctx.fillStyle = aTxt; ctx.beginPath(); ctx.moveTo(200, 0); ctx.lineTo(256, 0); ctx.lineTo(256, 56); ctx.fill(); ctx.save(); ctx.translate(235, 20); ctx.rotate(Math.PI / 4); drawAdvText(cd, 0, 0, 'bold 12px Arial', getContrast(aTxt), 'center'); ctx.restore(); drawAdvText(tA, 110, 40, '24px ' + fScrpt, mTxt, 'center'); drawAdvText(art, 110, 70, '14px ' + fInfo, mTxt, 'center'); }
-    else if (layoutStyle === 14) { ctx.fillStyle = '#111'; ctx.fillRect(0, 0, 128, 100); ctx.fillStyle = '#eee'; ctx.fillRect(128, 0, 128, 100); drawAdvText(tA, 64, 40, '20px ' + fDisp, '#eee', 'center'); drawAdvText(tB, 192, 40, '20px ' + fDisp, '#111', 'center'); ctx.fillStyle = acc1; ctx.fillRect(80, 75, 96, 25); drawAdvText(art, 128, 87, '14px ' + fInfo, getContrast(acc1), 'center'); drawAdvText(cd, 15, 15, 'bold 12px Arial', '#eee', 'left'); }
+    else if (layoutStyle === 13) { ctx.fillStyle = aTxt; ctx.beginPath(); ctx.moveTo(200, 0); ctx.lineTo(256, 0); ctx.lineTo(256, 56); ctx.fill(); ctx.save(); ctx.translate(235, 20); ctx.rotate(Math.PI / 4); drawAdvText(cd, 0, 0, 'bold 12px Arimo', getContrast(aTxt), 'center'); ctx.restore(); drawAdvText(tA, 110, 40, '24px ' + fScrpt, mTxt, 'center'); drawAdvText(art, 110, 70, '14px ' + fInfo, mTxt, 'center'); }
+    else if (layoutStyle === 14) { ctx.fillStyle = '#111'; ctx.fillRect(0, 0, 128, 100); ctx.fillStyle = '#eee'; ctx.fillRect(128, 0, 128, 100); drawAdvText(tA, 64, 40, '20px ' + fDisp, '#eee', 'center'); drawAdvText(tB, 192, 40, '20px ' + fDisp, '#111', 'center'); ctx.fillStyle = acc1; ctx.fillRect(80, 75, 96, 25); drawAdvText(art, 128, 87, '14px ' + fInfo, getContrast(acc1), 'center'); drawAdvText(cd, 15, 15, 'bold 12px Arimo', '#eee', 'left'); }
     else if (layoutStyle === 15) { drawAdvText(tA, 128, 40, '40px ' + fDisp, mTxt, 'center', 1, 1.4); drawAdvText(art + ' • ' + cd, 240, 85, '12px ' + fInfo, aTxt, 'right'); }
     else if (layoutStyle === 16) { ctx.fillStyle = aTxt; ctx.fillRect(0, 0, 60, 100); drawAdvText(cd, 30, 50, 'bold 20px ' + fInfo, getContrast(aTxt), 'center'); drawAdvText(tA, 70, 30, '22px ' + fDisp, mTxt, 'left'); drawAdvText(art, 70, 60, '16px ' + fScrpt, aTxt, 'left'); drawAdvText(tB, 70, 85, '14px ' + fDisp, mTxt, 'left'); }
     else if (layoutStyle === 17) { drawAdvText(tA, 130, 42, '28px ' + fDisp, '#000000', 'center', 1, 1); drawAdvText(tA, 128, 40, '28px ' + fDisp, mTxt, 'center', 1, 1); drawAdvText('BY ' + art, 128, 75, '16px ' + fInfo, aTxt, 'center'); boxCode(10, 10, 35, 20); }
     else if (layoutStyle === 18) { drawAdvText(art, 128, 20, '14px ' + fInfo, aTxt, 'center'); ctx.fillStyle = mTxt; ctx.fillRect(20, 35, 216, 35); drawAdvText(tA, 128, 53, '24px ' + fDisp, getContrast(mTxt), 'center'); drawAdvText(tB, 128, 85, '14px ' + fScrpt, mTxt, 'center'); }
-    else if (layoutStyle === 19) { drawAdvText(tA.charAt(0), 40, 50, '60px ' + fDisp, aTxt, 'center'); drawAdvText(tA.slice(1), 75, 40, '24px ' + fDisp, mTxt, 'left'); drawAdvText(art, 75, 70, '18px ' + fScrpt, mTxt, 'left'); drawAdvText(cd, 240, 20, '12px Arial', aTxt, 'right'); }
+    else if (layoutStyle === 19) { drawAdvText(tA.charAt(0), 40, 50, '60px ' + fDisp, aTxt, 'center'); drawAdvText(tA.slice(1), 75, 40, '24px ' + fDisp, mTxt, 'left'); drawAdvText(art, 75, 70, '18px ' + fScrpt, mTxt, 'left'); drawAdvText(cd, 240, 20, '12px Arimo', aTxt, 'right'); }
     else if (layoutStyle === 20) { boxCode(10, 10, 35, 20); drawAdvText(tA, 240, 40, '24px ' + fDisp, mTxt, 'right', 1, 1.2); drawAdvText(art, 240, 75, '16px ' + fScrpt, aTxt, 'right'); }
     else if (layoutStyle === 21) { drawAdvText(tA.split(' ')[0], 40, 35, '26px ' + fDisp, mTxt, 'left'); drawAdvText(tA.split(' ').slice(1).join(' ') || 'HIT', 216, 65, '26px ' + fDisp, mTxt, 'right'); drawAdvText(cd + ' • ' + art, 128, 50, '12px ' + fInfo, aTxt, 'center'); }
     else if (layoutStyle === 22) { drawAdvText(art + ' [' + cd + ']', 128, 25, '14px ' + fInfo, aTxt, 'center'); drawAdvText(tA, 128, 65, '36px ' + fDisp, mTxt, 'center', 1, 1.5); }
-    else if (layoutStyle === 23) { ctx.strokeStyle = mTxt; ctx.lineWidth = 1.5; ctx.font = '30px ' + fDisp; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.strokeText(tA, 128, 40, 240); drawAdvText(art, 128, 75, '16px ' + fScrpt, aTxt, 'center'); drawAdvText(cd, 20, 20, '12px Arial', mTxt, 'center'); }
+    else if (layoutStyle === 23) { ctx.strokeStyle = mTxt; ctx.lineWidth = 1.5; ctx.font = '30px ' + fDisp; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.strokeText(tA, 128, 40, 240); drawAdvText(art, 128, 75, '16px ' + fScrpt, aTxt, 'center'); drawAdvText(cd, 20, 20, '12px Arimo', mTxt, 'center'); }
     else if (layoutStyle === 24) { drawAdvText(tA, 128, 35, '28px ' + fDisp, mTxt, 'center', 1.2, 1); ctx.fillStyle = aTxt; ctx.fillRect(64, 65, 128, 20); drawAdvText(art, 128, 75, '14px ' + fInfo, getContrast(aTxt), 'center'); boxCode(210, 70, 35, 20); }
-    else if (layoutStyle === 25) { drawAdvText(art, 128, 20, '14px ' + fInfo, aTxt, 'center'); drawAdvText(tA, 128, 60, '40px ' + fDisp, mTxt, 'center', 1, 1.2); drawAdvText(cd, 25, 85, '12px Arial', mTxt, 'left'); }
+    else if (layoutStyle === 25) { drawAdvText(art, 128, 20, '14px ' + fInfo, aTxt, 'center'); drawAdvText(tA, 128, 60, '40px ' + fDisp, mTxt, 'center', 1, 1.2); drawAdvText(cd, 25, 85, '12px Arimo', mTxt, 'left'); }
     else if (layoutStyle === 26) { drawAdvText(cd, 25, 50, 'bold 16px ' + fInfo, getContrast(bgStyle === 25 ? bg2 : bg1), 'center', 1, 1, -Math.PI / 2); drawAdvText(tA, 150, 35, '26px ' + fDisp, mTxt, 'center'); drawAdvText(art, 150, 70, '16px ' + fScrpt, aTxt, 'center'); }
     else if (layoutStyle === 27) { drawAdvText(tA, 128, 25, '18px ' + fDisp, mTxt, 'center'); drawAdvText(tB, 128, 50, '18px ' + fDisp, mTxt, 'center'); drawAdvText(art, 128, 75, '18px ' + fScrpt, aTxt, 'center'); }
     else if (layoutStyle === 28) { drawAdvText(art, 128, 25, '16px ' + fScrpt, aTxt, 'center'); drawAdvText(tA, 128, 70, '36px ' + fDisp, mTxt, 'center', 1.2, 1); }
-    else if (layoutStyle === 29) { ctx.fillStyle = aTxt; ctx.beginPath(); ctx.moveTo(40, 40); ctx.lineTo(216, 40); ctx.arc(216, 50, 10, -Math.PI / 2, Math.PI / 2); ctx.lineTo(40, 60); ctx.arc(40, 50, 10, Math.PI / 2, -Math.PI / 2); ctx.fill(); drawAdvText(tA, 128, 50, '18px ' + fDisp, getContrast(aTxt), 'center'); drawAdvText(art, 128, 80, '14px ' + fInfo, mTxt, 'center'); drawAdvText(cd, 128, 20, '14px Arial', mTxt, 'center'); }
+    else if (layoutStyle === 29) { ctx.fillStyle = aTxt; ctx.beginPath(); ctx.moveTo(40, 40); ctx.lineTo(216, 40); ctx.arc(216, 50, 10, -Math.PI / 2, Math.PI / 2); ctx.lineTo(40, 60); ctx.arc(40, 50, 10, Math.PI / 2, -Math.PI / 2); ctx.fill(); drawAdvText(tA, 128, 50, '18px ' + fDisp, getContrast(aTxt), 'center'); drawAdvText(art, 128, 80, '14px ' + fInfo, mTxt, 'center'); drawAdvText(cd, 128, 20, '14px Arimo', mTxt, 'center'); }
 
     // Source stripe (Spotify integration only — not in spin7)
     const srcColor = song.source === 'now' ? '#00ff88' : song.source === 'queue' ? '#ffaa00' : null;
