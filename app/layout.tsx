@@ -32,10 +32,29 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           .center-screen {
             position: fixed; inset: 0; z-index: 30;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            gap: 24px; padding: 24px;
+            gap: clamp(14px, 3vw, 24px);
+            padding: clamp(16px, 4vw, 24px);
+            padding-bottom: calc(40px + env(safe-area-inset-bottom));
+            overflow-y: auto;
+            box-sizing: border-box;
           }
-          .landing-title { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 64px; letter-spacing: 4px; color: #00ff88; text-shadow: 0 0 20px rgba(0,255,136,0.4); }
-          .landing-tag { color: #888; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
+          .landing-title {
+            font-family: 'JetBrains Mono', ui-monospace, monospace;
+            font-size: clamp(34px, 10vw, 64px);
+            letter-spacing: clamp(2px, 0.6vw, 4px);
+            color: #00ff88;
+            text-shadow: 0 0 20px rgba(0,255,136,0.4);
+            line-height: 1.1;
+            max-width: 100%;
+            word-break: break-word;
+          }
+          .landing-tag {
+            color: #888;
+            font-size: clamp(11px, 2.6vw, 14px);
+            letter-spacing: clamp(1px, 0.4vw, 2px);
+            text-transform: uppercase;
+            max-width: 90vw;
+          }
           .loading-text { color: #ccc; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
           .sp-btn {
             background: rgba(20,10,15,0.85);
@@ -66,7 +85,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
           .site-footer {
             position: fixed;
-            bottom: 8px;
+            bottom: calc(8px + env(safe-area-inset-bottom));
             left: 0;
             right: 0;
             z-index: 100;
@@ -74,6 +93,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             justify-content: center;
             pointer-events: none;
             text-shadow: 0 0 8px rgba(0,0,0,0.8);
+            padding: 0 12px;
           }
           .site-footer a {
             pointer-events: auto;

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   isLoggedIn, login, loadAllTracks, play, nowPlaying,
+  getStoredClientId, setStoredClientId,
   getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
   getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
   UserPlaylist,
@@ -27,7 +28,57 @@ function loadScript(src: string) {
 
 type Phase = 'init' | 'unauthed' | 'fetching-playlists' | 'picking' | 'loading-tracks' | 'ready' | 'error';
 
-export default function Jukebox() {
+function ClientIdForm() {
+  const [clientId, setClientId] = useState('');
+  useEffect(() => { setClientId(getStoredClientId()); }, []);
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setStoredClientId(clientId);
+    login();
+  };
+  return (
+    <form
+      onSubmit={onSubmit}
+      style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 'min(360px, 86vw)' }}
+    >
+      <input
+        type="text"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="Spotify Client ID"
+        value={clientId}
+        onChange={(e) => setClientId(e.target.value)}
+        style={{
+          background: 'rgba(20,10,15,0.85)',
+          color: '#fff',
+          border: '2px solid rgba(0,255,136,0.35)',
+          borderRadius: 8,
+          padding: '10px 14px',
+          fontFamily: 'inherit',
+          fontSize: 13,
+          letterSpacing: 1,
+          textAlign: 'center',
+          outline: 'none',
+        }}
+      />
+      <button className="sp-btn" type="submit">LOGIN WITH SPOTIFY</button>
+      <div style={{ fontSize: 11, color: '#888', letterSpacing: 0.5, paddingTop: 4 }}>
+        Create a Spotify app to get a Client ID (free, ~1 minute).
+        {' '}
+        <a
+          href="https://github.com/spacedevin/juke.sh/blob/main/USER_GUIDE.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: '#00ff88', textDecoration: 'none' }}
+        >
+          How →
+        </a>
+      </div>
+    </form>
+  );
+}
+
+export default function Jukebox({ demo = false }: { demo?: boolean } = {}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<Phase>('init');
   const [loadingMsg, setLoadingMsg] = useState('Loading…');
@@ -41,8 +92,9 @@ export default function Jukebox() {
   const modeRef = useRef<{
     lighting: number; // 0 = classic diner, 1 = roller rink
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
+    demoSpin: number; // radians/frame to auto-rotate the drum (0 = off)
     goToActiveCard?: () => void;
-  }>({ lighting: 1, zoom: 0 });
+  }>({ lighting: 1, zoom: 0, demoSpin: demo ? 0.003 : 0 });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
   const tracksDataRef = useRef<{ tracks: any[]; nowItem: any } | null>(null);
@@ -156,7 +208,7 @@ export default function Jukebox() {
       )}
       {phase === 'unauthed' && (
         <div className="center-screen">
-          <button className="sp-btn" onClick={() => login()}>LOGIN WITH SPOTIFY</button>
+          <ClientIdForm />
         </div>
       )}
 
@@ -294,7 +346,7 @@ function initThree(
   tracks: any[],
   nowItem: any,
   setBanner: (text: string, idle?: boolean) => void,
-  mode: { lighting: number; zoom: number; goToActiveCard?: () => void }
+  mode: { lighting: number; zoom: number; demoSpin: number; goToActiveCard?: () => void }
 ) {
   const THREE = (window as any).THREE;
   const Tone = (window as any).Tone;
@@ -1159,6 +1211,11 @@ function initThree(
       } else {
         jukeboxGroup.rotation.y += delta * 0.1;
       }
+    }
+
+    // Demo mode: continuously rotate the drum to scroll cards past the camera
+    if (mode.demoSpin) {
+      jukeboxGroup.rotation.y += mode.demoSpin;
     }
 
     controls.update();

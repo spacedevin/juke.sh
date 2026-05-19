@@ -1,7 +1,29 @@
 // Browser-only Spotify PKCE client.
 // Tokens live in localStorage; no server proxy.
 
-const CLIENT_ID = process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID!;
+// Client ID resolution: user-supplied (localStorage) takes precedence over the
+// env-baked default. Lets people drop in their own Spotify app without
+// redeploying.
+const CLIENT_ID_KEY = 'sp_client_id';
+function clientId(): string {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem(CLIENT_ID_KEY);
+    if (stored) return stored;
+  }
+  return process.env.NEXT_PUBLIC_SPOTIFY_CLIENT_ID || '';
+}
+export function getStoredClientId(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem(CLIENT_ID_KEY) || '';
+}
+export function setStoredClientId(id: string) {
+  const v = (id || '').trim();
+  if (v) localStorage.setItem(CLIENT_ID_KEY, v);
+  else localStorage.removeItem(CLIENT_ID_KEY);
+}
+export function hasClientId(): boolean {
+  return !!clientId();
+}
 const SCOPES = [
   'user-read-playback-state',
   'user-modify-playback-state',
@@ -41,7 +63,7 @@ export async function login() {
   sessionStorage.setItem(SS_VERIFIER, verifier);
   const code_challenge = await challenge(verifier);
   const params = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: clientId(),
     response_type: 'code',
     redirect_uri: redirectUri(),
     code_challenge_method: 'S256',
@@ -64,7 +86,7 @@ export async function exchangeCode(code: string) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: CLIENT_ID,
+      client_id: clientId(),
       grant_type: 'authorization_code',
       code,
       redirect_uri: redirectUri(),
@@ -90,7 +112,7 @@ async function refresh(): Promise<string | null> {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: CLIENT_ID,
+      client_id: clientId(),
       grant_type: 'refresh_token',
       refresh_token,
     }),

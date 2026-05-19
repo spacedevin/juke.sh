@@ -8,8 +8,8 @@ Uses PKCE auth — each user authenticates with their own Spotify account and al
 
 1. Create an app at https://developer.spotify.com/dashboard
 2. Add redirect URIs (one per environment you'll run on):
+   - `https://juke.sh/callback` (juke server)
    - `http://127.0.0.1:3000/callback` (local dev)
-   - `https://YOUR_HOST/callback` (production / preview / tunnel)
 3. Copy `.env.local.example` to `.env.local`, fill in `NEXT_PUBLIC_SPOTIFY_CLIENT_ID`
 4. `npm install && npm run dev`
 5. Visit `http://127.0.0.1:3000` → click **LOGIN WITH SPOTIFY**
