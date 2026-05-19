@@ -12,7 +12,7 @@ export default function Landing() {
   return (
     <div className="center-screen">
       <div className="landing-title">juke.sh/BOX</div>
-      <div className="landing-tag">50s diner records, on your Spotify</div>
+      <div className="landing-tag">Spotify WebGL Jukebox</div>
       <button className="sp-btn" onClick={() => login()}>LOGIN WITH SPOTIFY</button>
     </div>
   );
