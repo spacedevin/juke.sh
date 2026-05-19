@@ -117,7 +117,8 @@ You'll see the 3D jukebox build itself with cards for every track. If something 
 
 > ⚠️ Playback requires an active Spotify device. Open Spotify on your phone, desktop, web player, or any other device first so juke.sh has somewhere to send the "play" command. If nothing plays when you tap a card, this is almost always why.
 
-> 📸 **Screenshot needed:** a final hero shot of the jukebox loaded with real tracks, ideally in roller-rink lighting with the LED trackers visible on the top rim.
+![Loaded jukebox](docs/screenshots/hero.png)
+
 
 ---
 
@@ -151,21 +152,6 @@ You can disconnect juke.sh from your Spotify account at any time:
 That instantly invalidates the token in your browser. You can re-add it any time by logging in again.
 
 ---
-
-## Required Screenshots — Summary Checklist
-
-For anyone adding screenshots later, here's the full list:
-
-- [x] **Dashboard landing page** (Step 1) — `docs/screenshots/dashboard.png`
-- [ ] **Create app form** (Step 2) — filled-in example with arrows highlighting App name, Redirect URI, and Web API checkbox
-- [ ] **App Settings — Client ID** (Step 3) — with the Client ID field highlighted and the copy button circled; **blur the actual ID value**
-- [x] **juke.sh landing page** (Step 4) — `docs/screenshots/juke.png`
-- [ ] **Spotify scope-approval screen** (Step 4) — the "do you allow juke.sh to..." consent screen
-- [x] **Playlist picker** (Step 5) — `docs/screenshots/playlist.png`
-- [x] **Loaded jukebox** (Step 5) — `docs/screenshots/box.png`
-- [ ] **Hero shot** (Controls) — pretty, full-jukebox view in roller-rink lighting
-
-Drop them into `docs/screenshots/` and update the `> 📸` placeholders above with markdown image syntax, e.g.:
 
 ```markdown
 ![Spotify Developer Dashboard](docs/screenshots/01-dashboard.png)

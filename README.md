@@ -1,5 +1,8 @@
 # Juke.sh
 
+![Loaded jukebox](docs/screenshots/demo.gif)
+
+
 3D Spotify jukebox modeled after a chrome-and-neon 50s diner record machine. Three.js scene, full procedural card art, real Spotify integration — your playlists become the records on the drum.
 
 Uses PKCE auth — each user authenticates with their own Spotify account and all API calls go directly from their browser to Spotify (no shared rate limit on a server proxy).

@@ -92,9 +92,10 @@ export default function Jukebox({ demo = false }: { demo?: boolean } = {}) {
   const modeRef = useRef<{
     lighting: number; // 0 = classic diner, 1 = roller rink
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
-    demoSpin: number; // radians/frame to auto-rotate the drum (0 = off)
+    demoSpin: number; // radians/SECOND for demo orbit (0 = off). Time-based so
+                      // the speed stays identical at 60 vs 120 fps displays.
     goToActiveCard?: () => void;
-  }>({ lighting: 1, zoom: 0, demoSpin: demo ? 0.003 : 0 });
+  }>({ lighting: 1, zoom: 0, demoSpin: demo ? 0.18 : 0 });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
   const tracksDataRef = useRef<{ tracks: any[]; nowItem: any } | null>(null);
@@ -1213,12 +1214,13 @@ function initThree(
       }
     }
 
-    // Demo mode: orbit the CAMERA around the jukebox (same as the user dragging
-    // left/right) so direction-tracking lights (dirLight, fillFrontAmber) also
-    // rotate and the scene feels alive. Spinning jukeboxGroup alone leaves the
-    // lights static.
+    // Demo mode: orbit the CAMERA around the jukebox each frame at a constant
+    // angular speed (radians/sec * delta), so direction-tracking lights also
+    // rotate. Using time-based delta keeps the speed identical on 60 Hz and
+    // 120 Hz (ProMotion) displays.
     if (mode.demoSpin) {
-      const az = controls.getAzimuthalAngle() + mode.demoSpin;
+      const dt = clock.getDelta();
+      const az = controls.getAzimuthalAngle() + mode.demoSpin * dt;
       const r = Math.hypot(camera.position.x, camera.position.z);
       camera.position.x = Math.sin(az) * r;
       camera.position.z = Math.cos(az) * r;

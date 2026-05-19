@@ -36,7 +36,7 @@ export default function Landing() {
         <div className="auth-hint">
           Create a Spotify app to get a Client ID (free, ~1 minute).
           {' '}
-          <a href="https://github.com/spacedevin/juke.sh#setup" target="_blank" rel="noopener noreferrer">
+          <a href="https://github.com/spacedevin/juke.sh/blob/main/USER_GUIDE.md" target="_blank" rel="noopener noreferrer">
             How →
           </a>
         </div>
