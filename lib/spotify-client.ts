@@ -290,7 +290,10 @@ export async function getUserPlaylists(): Promise<UserPlaylist[]> {
 
 // --- localStorage cache for selected playlists + their fetched tracks ---
 const SEL_KEY = 'jukebox_selected_playlists';
-const TRACKS_KEY = 'jukebox_tracks_cache';
+// Bumped to v2 when JukeTrack gained `contextUri` (for playlist-context play).
+// Caches written under the old key are silently abandoned — the user picks up
+// fresh data on next load and gets context-aware playback automatically.
+const TRACKS_KEY = 'jukebox_tracks_cache_v2';
 const TRACKS_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 export function getSelectedPlaylists(): string[] {
@@ -307,7 +310,13 @@ export function getCachedTracks(ids: string[]): { tracks: JukeTrack[]; nowItem: 
     const obj = JSON.parse(raw);
     if (obj.idsKey !== cacheKey(ids)) return null;
     if (Date.now() - obj.timestamp > TRACKS_TTL_MS) return null;
-    return { tracks: obj.tracks, nowItem: obj.nowItem };
+    // Schema guard: every playlist-sourced track must have a contextUri so
+    // play() can use it for the context_uri + offset request. If even one
+    // is missing the cache predates the contextUri rollout — discard the
+    // whole entry and let loadAllTracks repopulate it.
+    const tracks: JukeTrack[] = obj.tracks ?? [];
+    if (tracks.some((t) => t.source === 'playlist' && !t.contextUri)) return null;
+    return { tracks, nowItem: obj.nowItem };
   } catch { return null; }
 }
 export function setCachedTracks(ids: string[], tracks: JukeTrack[], nowItem: any) {
@@ -344,6 +353,24 @@ export async function addToQueue(uri: string) {
   return spotify(`/me/player/queue?uri=${encodeURIComponent(uri)}`, { method: 'POST' });
 }
 
+// List Spotify devices the user's account knows about (active or not).
+// Used to recover from NO_ACTIVE_DEVICE by transferring playback to one of
+// them before re-issuing the play command.
+export async function getDevices(): Promise<{ devices: Array<{ id: string; name: string; is_active: boolean; type: string }> }> {
+  return spotify('/me/player/devices');
+}
+
+// Move playback to a specific device. With `play: false`, just hands the
+// session over without starting; the subsequent play() call provides the
+// actual content. Spotify needs a brief moment after this returns before
+// /me/player/play stops 404ing on the same device.
+export async function transferPlayback(deviceId: string, play = false) {
+  return spotify('/me/player', {
+    method: 'PUT',
+    body: JSON.stringify({ device_ids: [deviceId], play }),
+  });
+}
+
 // Play a track. If `contextUri` is supplied (typically the playlist or album
 // the track was discovered in), Spotify plays the track within that context
 // and auto-continues to the next track when this one ends — so the user gets
@@ -352,6 +379,13 @@ export async function addToQueue(uri: string) {
 // Without `contextUri`, single-URI play is used (the legacy stop-after-this
 // behavior), or — if `uri` is a context URI itself — that context is played
 // from the start.
+//
+// Auto-recovery: Spotify's play endpoint 404s with NO_ACTIVE_DEVICE when no
+// device is currently active for the account. If we see that, we look up the
+// account's known devices, transfer playback to whichever one Spotify lists
+// first (typically the most-recently-used), wait a beat for the handover to
+// settle, then retry. If the account has zero known devices, we re-throw
+// with a clearer error so the UI can tell the user to open Spotify somewhere.
 export async function play(uri?: string, contextUri?: string) {
   let body: any;
   if (uri && contextUri) {
@@ -359,9 +393,25 @@ export async function play(uri?: string, contextUri?: string) {
   } else if (uri) {
     body = uri.startsWith('spotify:track:') ? { uris: [uri] } : { context_uri: uri };
   }
-  return spotify('/me/player/play', {
+  const send = () => spotify('/me/player/play', {
     method: 'PUT',
     body: body ? JSON.stringify(body) : undefined,
   });
+  try {
+    return await send();
+  } catch (err: any) {
+    const msg = String(err?.message ?? '');
+    if (!/404|NO_ACTIVE_DEVICE/.test(msg)) throw err;
+    const list = await getDevices().catch(() => null);
+    const device = list?.devices?.[0];
+    if (!device) {
+      throw new Error('No Spotify devices found. Open Spotify on a phone, desktop, or web player and try again.');
+    }
+    await transferPlayback(device.id, false);
+    // Spotify takes ~150-300ms to register the new active device; the play
+    // endpoint will keep 404ing until then.
+    await new Promise((r) => setTimeout(r, 350));
+    return send();
+  }
 }
 export const nowPlaying = () => spotify('/me/player/currently-playing');

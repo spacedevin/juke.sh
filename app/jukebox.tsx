@@ -209,6 +209,21 @@ export default function Jukebox({
   const [cachedIds, setCachedIds] = useState<Set<string>>(new Set());
   const [showHints, setShowHints] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
+  // Transient playback-error message (e.g. "No Spotify devices found"). Set
+  // by the play() catch path and auto-cleared after PLAYBACK_TOAST_MS.
+  const [playbackMsg, setPlaybackMsg] = useState<string>('');
+  const playbackMsgTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const showPlaybackError = (msg: string) => {
+    if (!mountedRef.current) return;
+    setPlaybackMsg(msg);
+    if (playbackMsgTimer.current) clearTimeout(playbackMsgTimer.current);
+    playbackMsgTimer.current = setTimeout(() => {
+      if (mountedRef.current) setPlaybackMsg('');
+    }, 6000);
+  };
+  useEffect(() => () => {
+    if (playbackMsgTimer.current) clearTimeout(playbackMsgTimer.current);
+  }, []);
   const modeRef = useRef<{
     lighting: number; // 0 = classic diner, 1 = roller rink
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
@@ -298,6 +313,7 @@ export default function Jukebox({
       (hasActive) => {
         if (mountedRef.current) setShowHints(!hasActive);
       },
+      showPlaybackError,
       modeRef.current,
       rows,
     );
@@ -517,6 +533,11 @@ export default function Jukebox({
               <div className="instruction-subtitle">5-TAP FOR SETTINGS</div>
             </div>
           )}
+          {playbackMsg && (
+            <div className="playback-toast" onClick={() => setPlaybackMsg('')}>
+              {playbackMsg}
+            </div>
+          )}
         </div>
       )}
 
@@ -637,6 +658,28 @@ export default function Jukebox({
           -webkit-tap-highlight-color: transparent;
         }
         #ui-overlay { position: fixed; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; z-index: 10; }
+        .playback-toast {
+          position: fixed;
+          top: max(20px, env(safe-area-inset-top));
+          left: 50%;
+          transform: translateX(-50%);
+          max-width: min(420px, 88vw);
+          background: rgba(60, 10, 20, 0.95);
+          color: #ffcdd6;
+          border: 1px solid rgba(255, 102, 128, 0.4);
+          box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+          padding: 12px 18px;
+          border-radius: 10px;
+          font-size: 13px;
+          letter-spacing: 0.5px;
+          text-align: center;
+          line-height: 1.5;
+          pointer-events: auto;
+          cursor: pointer;
+          z-index: 200;
+          animation: toast-in 0.25s ease-out;
+        }
+        @keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
         .instruction-badge {
           background: rgba(20,10,15,0.85);
           color: #00ff88;
@@ -748,6 +791,7 @@ function initThree(
   tracks: any[],
   nowItem: any,
   onActiveChange: (hasActive: boolean) => void,
+  onPlaybackError: (message: string) => void,
   mode: {
     lighting: number;
     zoom: number;
@@ -1780,7 +1824,19 @@ ${shader.fragmentShader}
           shuffleInitialized = true;
           void spotifySetShuffle(mode.shuffle).catch(() => {});
         }
-      } catch {}
+      } catch (err: any) {
+        // play() now auto-recovers from NO_ACTIVE_DEVICE by transferring to
+        // any known device and retrying. If we still got here, either the
+        // account has zero devices Spotify knows about, or something else
+        // (bad URI, auth issue) went wrong. Surface it so the user knows
+        // why nothing's playing.
+        console.warn('[jukebox] play() failed:', err?.message ?? err);
+        onPlaybackError(err?.message ?? 'Playback failed');
+        // Roll the active-card highlight back since the track isn't really
+        // playing — keeps the UI honest.
+        activeCard = null;
+        onActiveChange(false);
+      }
     }
   }
 
