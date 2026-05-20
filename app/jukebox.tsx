@@ -78,7 +78,7 @@ function SettingsModal({
 
   return (
     <div className="center-screen settings-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal-narrow" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">SETTINGS</div>
         <div className="modal-sub">5-tap anywhere to reopen · ESC to close</div>
 
@@ -594,6 +594,7 @@ export default function Jukebox({
 
         /* Settings modal */
         .settings-backdrop { background: rgba(0,0,0,0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+        .modal.modal-narrow { width: min(360px, 92vw); padding: 18px; gap: 8px; }
         .set-row { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
         .set-row.set-toggle { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
         .set-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; color: #ccc; letter-spacing: 1px; }
@@ -689,7 +690,12 @@ function initThree(
   scene.background = new THREE.Color(0x0a0508);
   const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
   camera.position.set(0, 5, 60);
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  // logarithmicDepthBuffer = much better depth precision across wide ranges.
+  // Needed because at max zoomFlat the FOV drops to ~2° → camera pulls back
+  // to ~700 units, and the cards-vs-drum 0.03-unit gap z-fights with the
+  // standard 24-bit nonlinear depth buffer (the dark drum #111 shows through
+  // the cards). Tiny per-pixel shader cost; eliminates the artifact entirely.
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, logarithmicDepthBuffer: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
