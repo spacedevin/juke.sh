@@ -1380,10 +1380,11 @@ function initThree(
 
   const clock = new THREE.Clock();
   let raf = 0;
-  // Sentinel for cheap "did the drum rotate this frame?" check (skips the
-  // back-of-drum cull when nothing moved). NaN guarantees the first frame
-  // runs the cull pass.
+  // Sentinels for cheap "did anything that affects card visibility change?"
+  // (skips the back-of-drum cull when nothing moved). NaN guarantees the
+  // first frame runs the cull pass.
   let lastCullRot = NaN;
+  let lastCullCamAz = NaN;
 
   // Scratch objects reused across frames to avoid 20+ allocations/frame.
   const _camOffset = new THREE.Vector3();
@@ -1621,13 +1622,16 @@ function initThree(
     // Back-of-drum culling. Cards on the far side of the drum are still
     // submitted to the GPU even though backface-cull discards their fragments.
     // Hiding them outright (set .visible = false) skips frustum + draw-call
-    // submission entirely. Only re-evaluate when the drum has actually rotated
-    // — that's the only thing that can change a card's world theta.
-    if (jukeboxGroup.rotation.y !== lastCullRot) {
-      lastCullRot = jukeboxGroup.rotation.y;
+    // submission entirely. Re-evaluate only when the drum OR the camera has
+    // rotated since last frame.
+    const camAz = Math.atan2(camera.position.x, camera.position.z);
+    const groupRot = jukeboxGroup.rotation.y;
+    if (groupRot !== lastCullRot || camAz !== lastCullCamAz) {
+      lastCullRot = groupRot;
+      lastCullCamAz = camAz;
       const limit = -0.34; // cos(110°) — keeps front + sides, drops the back third
       for (const c of cards) {
-        const dotFront = Math.cos(c.userData.theta + lastCullRot - CAMERA_AZ);
+        const dotFront = Math.cos(c.userData.theta + groupRot - camAz);
         c.visible = dotFront > limit;
       }
     }
