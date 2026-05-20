@@ -29,6 +29,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             font-family: 'JetBrains Mono', ui-monospace, monospace;
             text-align: center;
           }
+          ::selection, *::selection {
+            background: #00ff88 !important;
+            color: #0a0a0a !important;
+          }
           .center-screen {
             position: fixed; inset: 0; z-index: 30;
             display: flex; flex-direction: column; align-items: center; justify-content: center;

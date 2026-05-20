@@ -337,6 +337,13 @@ export async function setShuffle(state: boolean) {
   return spotify(`/me/player/shuffle?state=${state}`, { method: 'PUT' });
 }
 
+// Append a track to the Spotify playback queue. 204 on success, 404 if no
+// active device. Caller should ensure there's an active device first (we
+// surface this via the "tap a card to start" UX before queueing is useful).
+export async function addToQueue(uri: string) {
+  return spotify(`/me/player/queue?uri=${encodeURIComponent(uri)}`, { method: 'POST' });
+}
+
 // Play a track. If `contextUri` is supplied (typically the playlist or album
 // the track was discovered in), Spotify plays the track within that context
 // and auto-continues to the next track when this one ends — so the user gets

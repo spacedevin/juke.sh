@@ -113,11 +113,12 @@ You'll see the 3D jukebox build itself with cards for every track. If something 
 
 | Input | What it does |
 | --- | --- |
-| **Tap a card** | Play that track on your active Spotify device. Tap the playing card again to deselect. |
-| **Drag left / right** | Spin the jukebox. The rotation speed auto-scales with the size of the deck so a 1000-track jukebox doesn't whip past you. |
-| **Drag up / down** | Continuously blend between **Roller Rink** (drag up — moody neon, color cycles with the playing track) and **Classic Diner** (drag down — warm amber bulbs). |
+| **Tap a card** | Play that track on your active Spotify device. The playlist it came from keeps playing afterward (juke.sh sends Spotify the playlist as context). Tap the playing card again to deselect. |
+| **Long-press a card** (≥350ms) | **Add to queue** instead of playing immediately. A cyan LED strip lights up across the top edge of the card (same shape as the warm LED bar the currently-playing card gets, just in cyan) and stays lit until that track actually starts playing. Mobile devices give a short haptic buzz on long-press confirm. |
+| **Drag left / right** | Spin the jukebox. The drum tracks your finger 1:1 and carries momentum when you fling. The rotation speed auto-scales with the size of the deck so a 1000-track jukebox doesn't whip past you. |
+| **Drag up / down** | Continuously blend between **Roller Rink** (drag up — moody neon, color cycles with the playing track) and **Classic Diner** (drag down — warm amber bulbs). Default is a 50/50 blend. |
 | **Double-tap empty space / chrome** | Snap zoom between full fit-to-screen and tight-on-cards. |
-| **`C` key** | Toggle the category labels (EXTENDED PLAY, VARIETIES, …) on / off. On by default. |
+| **5-tap anywhere** (~800ms) | Open the settings modal — see the [Settings menu](#settings-menu) section below. |
 
 ### Zoom
 
@@ -136,6 +137,13 @@ While a track is playing, juke.sh:
 - **Auto-jumps** the drum to center the new track when Spotify reports a track change (polled every 8 s).
 - **Reuses empty slots** to add tracks that weren't in your selected playlists (e.g. you start playing a one-off song outside the loaded deck — it gets dropped into the next blank card on the drum).
 
+### Queueing tracks
+
+- **Long-press any card** to add it to your Spotify queue without interrupting the currently playing track. A **cyan LED strip** lights up across the top edge of the card — mirroring the warm-amber LED that runs across the currently-playing card, just in cyan to mean "queued" instead of "playing."
+- **Tracks already in your Spotify queue** when juke.sh loads (e.g. you queued them on your phone earlier) light up the same cyan strip automatically — read from `/me/player/queue` at boot.
+- **Tap (don't long-press) a card** to play it immediately. With Spotify's queue model, a tapped track interrupts whatever's playing; queued tracks slot in after the current one ends.
+- **The cyan strip clears** the moment Spotify advances to that track — the playing card lights up in warm amber instead.
+
 > ⚠️ Playback requires an active Spotify device. Open Spotify on your phone, desktop, web player, or any other device first so juke.sh has somewhere to send the "play" command. If nothing plays when you tap a card, this is almost always why.
 
 ![Loaded jukebox](docs/screenshots/hero.png)
@@ -146,8 +154,9 @@ While a track is playing, juke.sh:
 
 | URL | What it shows |
 | --- | --- |
-| `/` | Landing page with the Client ID form + login button. Auto-redirects to `/box` if you're already signed in. |
-| `/box` | The actual jukebox. Bookmarkable. If you visit it signed out you're bounced back to `/`. |
+| `/` | Landing page. When signed out: Client ID form + LOGIN button. When signed in: **ENTER THE JUKEBOX** and **LOG OUT** buttons — no auto-redirect. |
+| `/box` | The actual jukebox. Bookmarkable. If you visit it signed out, juke.sh auto-starts the Spotify login flow (provided you've entered a Client ID before); otherwise you're bounced back to `/`. |
+| `/logout` | Clears your Spotify session (access + refresh tokens, cached tracks) and bounces back to `/`. Your saved Client ID and playlist selections are kept so re-login is one click. |
 | `/dev` | Skips Spotify entirely and loads procedural fake tracks. No-login visual playground that anyone can hit — useful for screenshots, recordings, or sharing the look without giving someone your Spotify. All the same keyboard shortcuts work as on `/box`. |
 
 Route paths are case-insensitive (`/BOX`, `/Demo`, etc. all 308-redirect to lowercase).
@@ -159,8 +168,10 @@ All shortcuts work on every route (`/box` and `/dev`). Suppressed while you're f
 | Key | What it does |
 | --- | --- |
 | **C** | Toggle the category labels under each column (EXTENDED PLAY, VARIETIES, YOUR PICKS, …). On by default. |
-| **← Left arrow** | Nudge the auto-orbit speed leftward (+0.05 rad/sec, clamped ±1.5). Default is 0 — the jukebox doesn't spin on its own unless you press an arrow. |
-| **→ Right arrow** | Nudge the auto-orbit speed rightward (−0.05 rad/sec). Press repeatedly to accelerate, or use the opposite key to slow / reverse. |
+| **M** | Mute / unmute the click-chord on card tap + the ambient analog hum. Persisted. |
+| **S** | Toggle Spotify shuffle on / off for your playback. **On by default** — the moment you play your first track each session, juke.sh tells Spotify to shuffle, so the playlist's auto-continue picks random tracks instead of going sequential. Toggling mid-session pushes the new state to Spotify immediately. |
+| **← Left arrow** | Nudge the auto-orbit speed leftward (+0.05 cards/sec, clamped ±10). Default is 0 — the jukebox doesn't spin on its own unless you press an arrow. |
+| **→ Right arrow** | Nudge the auto-orbit speed rightward (−0.05 cards/sec). Press repeatedly to accelerate, or use the opposite key to slow / reverse. |
 | **↑ Up arrow** | Add one row to the jukebox (more cards per column). Range 4–20. Triggers a quick scene rebuild. |
 | **↓ Down arrow** | Remove one row from the jukebox. |
 | **Z** | Tighten the max-zoom-in level (crops more chrome off the top + bottom rims). |
@@ -170,17 +181,19 @@ All shortcuts work on every route (`/box` and `/dev`). Suppressed while you're f
 
 ### Settings menu
 
-Tap the screen **5 times in quick succession** (about 800ms total) anywhere outside a card to pop a settings modal. Useful on phones / iPads where you don't have a keyboard. Sliders for:
+Tap the screen **5 times in quick succession** (about 800ms total) anywhere outside a card to pop a settings modal. Useful on phones / iPads where you don't have a keyboard. Sliders / toggles for:
 
 - **Rotation speed** — same as the ←/→ arrows, but continuous. Measured in *cards per second*, so a setting of `2` means roughly two cards scroll past the camera every second regardless of how big the jukebox is.
 - **Rows per column** — same as the ↑/↓ arrows.
 - **Zoom-in tightness** — same as the Z/X keys.
 - **Zoom-in flatness** — same as the V key. 0% = normal telephoto, 100% = ultra-flat lens (looks nearly orthographic).
 - **Category labels** — same as the C key.
+- **Audio [M]** — same as the M key. Mutes the chord + hum.
+- **Shuffle [S]** — same as the S key. Toggles Spotify shuffle.
 
 Changes apply live and persist across reloads. ESC or tap outside to close.
 
-All settings (rotation, rows, lighting drag, category toggle, zoom-tightness) are saved to `localStorage` and restored on next visit.
+All settings (rotation, rows, lighting drag, category toggle, zoom-tightness, audio, shuffle) are saved to `localStorage` and restored on next visit.
 
 ---
 

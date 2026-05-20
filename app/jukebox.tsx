@@ -8,7 +8,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import * as Tone from 'tone';
 import {
   isLoggedIn, login, getStoredClientId, loadAllTracks, play, nowPlaying,
-  setShuffle as spotifySetShuffle,
+  setShuffle as spotifySetShuffle, addToQueue,
   getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
   getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
   type UserPlaylist,
@@ -512,7 +512,7 @@ export default function Jukebox({
         <div id="ui-overlay">
           {showHints && (
             <div>
-              <div className="instruction-badge">TAP TO PLAY/PAUSE</div>
+              <div className="instruction-badge">TAP TO PLAY • HOLD TO QUEUE</div>
               <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM</div>
               <div className="instruction-subtitle">5-TAP FOR SETTINGS</div>
             </div>
@@ -1249,7 +1249,16 @@ function initThree(
     }
   }
 
-  // Cards as InstancedMesh + texture atlas.
+  // Queue indicator — pure shader-driven. Each card's atlas geometry has a
+  // per-instance `aHighlight` (0..1) attribute; the fragment shader adds an
+  // HDR-cyan emissive wash to the top portion of the card when that value is
+  // non-zero (see makeAtlasMat). Setting it to 1 lights the card up; lerping
+  // back to 0 fades it out. **Zero real lights** for the queue indication —
+  // the only added per-frame cost is one smoothstep + mul-add per FRAGMENT
+  // ON CARDS ONLY, not the multiplicative per-light cost a real PointLight
+  // would impose on every Standard material in the scene.
+  type QueueRef = { atlasIdx: number; cellIdx: number };
+  const queueByUri = new Map<string, QueueRef>();
   // Before: COLS*ROWS draw calls, one Mesh + Material + CanvasTexture per card.
   // After:  ceil(N / CELLS_PER_ATLAS) draw calls — one InstancedMesh per atlas.
   //         For a 320-card deck that's 1 draw call vs 320. Each card still
@@ -1298,6 +1307,14 @@ function initThree(
     mesh: THREE.InstancedMesh;
     capacity: number;
     cellRefs: (CardRef | null)[];
+    // Per-cell highlight fade state for the cyan queue glow. `current` is the
+    // backing storage for the aHighlight InstancedBufferAttribute. `target`
+    // is what we're lerping toward. `highlightAttr.needsUpdate = true` after
+    // any frame that modified `current`.
+    highlightCurrent: Float32Array;
+    highlightTarget: Float32Array;
+    highlightAttr: THREE.InstancedBufferAttribute;
+    highlightDirty: boolean;
   };
 
   const cards: CardRef[] = [];
@@ -1327,6 +1344,14 @@ function initThree(
       aUvRect[i * 4 + 3] = (CELL_H - 1) / ATLAS_SIZE;
     }
     geo.setAttribute('aUvRect', new THREE.InstancedBufferAttribute(aUvRect, 4));
+    // Per-instance highlight intensity (0..1). Drives the cyan queue glow at
+    // the top edge of the card via the shader patch in makeAtlasMat. The
+    // animate loop lerps this toward a per-cell target each frame and
+    // re-uploads the buffer when anything changed. Starts at 0 (no glow).
+    const aHighlight = new Float32Array(capacity);
+    const aHighlightAttr = new THREE.InstancedBufferAttribute(aHighlight, 1);
+    aHighlightAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('aHighlight', aHighlightAttr);
     return geo;
   }
 
@@ -1335,13 +1360,71 @@ function initThree(
     // identical shading.
     const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85, metalness: 0 });
     mat.onBeforeCompile = (shader) => {
-      shader.vertexShader = 'attribute vec4 aUvRect;\n' + shader.vertexShader.replace(
+      // VS — forward the per-instance UV rect + highlight to the fragment.
+      // `vLocalUv` is the un-remapped 0..1 UV (used to mask the queue glow to
+      // the top edge of the card surface), separate from the atlas-remapped
+      // `vMapUv` that the standard map sampler uses.
+      shader.vertexShader = `
+attribute vec4 aUvRect;
+attribute float aHighlight;
+varying float vHighlight;
+varying vec2 vLocalUv;
+${shader.vertexShader}
+`.replace(
         '#include <uv_vertex>',
         `#include <uv_vertex>
         #ifdef USE_MAP
           vMapUv = uv * aUvRect.zw + aUvRect.xy;
         #endif
-        `
+        vHighlight = aHighlight;
+        vLocalUv = uv;
+        `,
+      );
+      // FS — adds an HDR-cyan emissive wash to the top portion of the card
+      // when aHighlight > 0. Replaces the 40 PointLights the queue indicator
+      // previously used (each of which forced every Standard material in the
+      // scene to evaluate one more light per fragment). Now: 1 smoothstep +
+      // 1 mul-add per fragment ON CARDS ONLY, zero scene-light cost, zero
+      // material recompile churn when queueing.
+      // One simulated point light at the top-center edge of the card. Single
+      // light reads more clearly than a top+bottom pair because the eye
+      // expects a card to be "lit from above" — having two equally bright
+      // spots makes the surface ambiguous. The light is pushed slightly
+      // *outside* the card edge (y=1.08) so its brightest pixel lands
+      // inside the card, not on the seam.
+      //
+      // Inverse-square falloff (the same model a real PBR PointLight uses):
+      // `LH / (LH + dist²)`. The "light-height" term LH sets how concentrated
+      // the hotspot is — small LH → tight punchy dot, large LH → soft glow
+      // extending into the card.
+      //
+      // Aspect correction: cards are 2.56× wider than tall, so we scale
+      // x-distance by 2.56 in card-local space — keeps the hotspot circular
+      // in pixel space instead of stretching it into a horizontal ellipse.
+      const ASPECT = (CARD_W / CARD_H).toFixed(3);
+      shader.fragmentShader = `
+varying float vHighlight;
+varying vec2 vLocalUv;
+${shader.fragmentShader}
+`.replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+        if (vHighlight > 0.0) {
+          vec2 aspect = vec2(${ASPECT}, 1.0);
+          vec2 d = (vLocalUv - vec2(0.5, 1.08)) * aspect;
+          const float LH = 0.015;
+          // Squared falloff — sharper drop-off than raw inverse-square. Keeps
+          // the glow contained to the top portion of the card instead of
+          // blowing out the whole upper half.
+          float glow = LH / (LH + dot(d, d));
+          glow *= glow;
+          // Pure cyan, peak (0, 3.5, 5.0) — bright enough to crush to white
+          // at the very center under NeutralToneMapping, with cyan visible
+          // only in a small halo around the hotspot. R=0 keeps the blowout
+          // blue-white, not desaturated grey.
+          totalEmissiveRadiance += vec3(0.0, 3.5, 5.0) * vHighlight * glow;
+        }
+        `,
       );
     };
     return mat;
@@ -1374,7 +1457,17 @@ function initThree(
       mesh.instanceMatrix.needsUpdate = true;
       jukeboxGroup.add(mesh);
       cardInstancedMeshes.push(mesh);
-      atlases.push({ canvas, ctx, texture, mesh, capacity, cellRefs: Array(capacity).fill(null) });
+      // The aHighlight InstancedBufferAttribute is on the geometry; reach in
+      // and grab it so the per-frame fade loop can flag re-uploads.
+      const highlightAttr = geo.getAttribute('aHighlight') as THREE.InstancedBufferAttribute;
+      atlases.push({
+        canvas, ctx, texture, mesh, capacity,
+        cellRefs: Array(capacity).fill(null),
+        highlightCurrent: highlightAttr.array as Float32Array,
+        highlightTarget: new Float32Array(capacity),
+        highlightAttr,
+        highlightDirty: false,
+      });
     }
   }
 
@@ -1538,6 +1631,44 @@ function initThree(
     }
   }
 
+  // Light the cyan queue glow on a card. Sets the per-cell shader target to 1;
+  // the per-frame fader in animate lerps the current value toward it. Re-queue
+  // of the same URI is a no-op apart from bumping the target back up — which
+  // also revives a still-fading-out cell smoothly.
+  function markQueued(card: CardRef): void {
+    const uri = card.userData.song.uri;
+    let ref = queueByUri.get(uri);
+    if (!ref) {
+      const { atlasIdx, cellIdx } = slotToAtlas(card.userData.c, card.userData.r);
+      ref = { atlasIdx, cellIdx };
+      queueByUri.set(uri, ref);
+    }
+    const atlas = atlases[ref.atlasIdx];
+    atlas.highlightTarget[ref.cellIdx] = 1;
+    atlas.highlightDirty = true;
+  }
+
+  // Drop the per-cell target to 0; the per-frame fader will smoothly dim the
+  // shader glow. The URI mapping is removed immediately — if the user
+  // re-queues mid-fade, markQueued recomputes the same (atlasIdx, cellIdx)
+  // (slotToAtlas is deterministic per (c, r)) and bumps the target back up,
+  // so the fade-out reverses cleanly.
+  function unmarkQueued(uri: string): void {
+    const ref = queueByUri.get(uri);
+    if (!ref) return;
+    const atlas = atlases[ref.atlasIdx];
+    atlas.highlightTarget[ref.cellIdx] = 0;
+    atlas.highlightDirty = true;
+    queueByUri.delete(uri);
+  }
+
+  // Surface Spotify's existing queue at boot — every card whose track came in
+  // via /me/player/queue gets a cyan indicator. They clear automatically when
+  // the track starts playing (see syncNowPlaying / selectCard).
+  for (const card of cards) {
+    if (card.userData.song.source === 'queue') markQueued(card);
+  }
+
   // Add a new now-playing track. Uses an empty slot if available, otherwise
   // recycles the oldest previously-queued slot. Returns the (existing or new)
   // card for the given URI, or null if none can be placed.
@@ -1607,6 +1738,9 @@ function initThree(
     }
     if (!match || match === activeCard) return;
     activeCard = match;
+    // Whatever's playing now isn't "queued" anymore — clear the indicator if
+    // we had one on this track (poll-discovered or long-press-added).
+    unmarkQueued(match.userData.song.uri);
     onActiveChange(true);
     mode.goToActiveCard?.();
   }
@@ -1619,6 +1753,9 @@ function initThree(
     }
     playSelectionSound();
     activeCard = card;
+    // Picking a card to PLAY removes its queued indicator (if any) — the
+    // user explicitly bumped it to "now playing".
+    unmarkQueued(card.userData.song.uri);
     onActiveChange(true);
     // If we're sitting at fit-zoom and the user just picked a card to play,
     // snap in on it. Already-zoomed-in stays put — the user clearly tapped
@@ -1647,16 +1784,43 @@ function initThree(
     }
   }
 
+  // Long-press handler. Three behaviors depending on the card's state:
+  //  • Currently playing → no-op (can't queue what's already playing).
+  //  • Already queued → un-queue the visual indicator (NOTE: Spotify's Web
+  //    API has no remove-from-queue endpoint, so the track will still play
+  //    through; this is a local-only "I changed my mind, hide the marker"
+  //    affordance until Spotify exposes a real delete).
+  //  • Otherwise → POST /me/player/queue + light up the cyan indicator.
+  async function queueCard(card: any) {
+    if (card === activeCard) return;
+    const uri = card.userData.song.uri;
+    if (queueByUri.has(uri)) {
+      unmarkQueued(uri);
+      return;
+    }
+    playSelectionSound();
+    markQueued(card);
+    if (mode.debug) return;
+    try { await addToQueue(uri); } catch {}
+  }
+
   // Tap/drag/pinch handling:
-  //  • Tap (move <DRAG_THRESHOLD px in <500ms) → card / button
+  //  • Tap on card (<TAP_MAX_MS, <DRAG_THRESHOLD px) → play it
+  //  • Long-press on card (≥TAP_MAX_MS, <DRAG_THRESHOLD px) → add to queue
   //  • Single-finger vertical drag → mode.lighting
-  //  • Single-finger horizontal drag → OrbitControls rotation
+  //  • Single-finger horizontal drag → drum rotation (custom, see onPointerMove)
   //  • Two-finger pinch → mode.zoom (mobile equivalent of mouse wheel)
   //  • Double-tap on chrome → snap zoom max/min
   const DRAG_THRESHOLD = 6;
+  const TAP_MAX_MS = 350;        // anything held longer becomes a long-press
   const DOUBLE_TAP_MS = 350;
-  let downX = 0, downY = 0, downAt = 0, lastX = 0, lastY = 0, isDragging = false;
+  let downX = 0, downY = 0, lastX = 0, lastY = 0, isDragging = false;
   let lastTapAt = 0;
+  // Long-press fires VIA TIMER at TAP_MAX_MS — we don't wait for pointerup.
+  // `longPressTimer` is cleared on lift / drag / pinch. `longPressFired` keeps
+  // pointerup from also treating the same gesture as a tap.
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let longPressFired = false;
   // Momentum state for the horizontal drag → drum rotation. azVelocity is the
   // rotational speed (rad/s) the camera should keep coasting at after release.
   // Sampled from the last pointermove (dx/dt), then decayed each frame in
@@ -1681,6 +1845,25 @@ function initThree(
     camera.position.x = Math.sin(az) * r;
     camera.position.z = Math.cos(az) * r;
   }
+  // Raycast helper — translates a screen-space (x, y) into a CardRef or null.
+  // Shared by the long-press timer and the pointerup tap handler.
+  function cardAtScreenPoint(x: number, y: number): any {
+    mouse.x = (x / window.innerWidth) * 2 - 1;
+    mouse.y = -(y / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(cardInstancedMeshes);
+    if (!hits.length) return null;
+    const hit = hits[0];
+    const atlasIdx = cardInstancedMeshes.indexOf(hit.object as THREE.InstancedMesh);
+    const cellIdx = hit.instanceId;
+    return atlasIdx >= 0 && cellIdx != null ? atlases[atlasIdx].cellRefs[cellIdx] : null;
+  }
+  function cancelLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
   function onPointerDown(event: any) {
     initAudio();
     // Pull focus back to our container so the canvas / iOS selection halo
@@ -1688,18 +1871,34 @@ function initThree(
     container.focus({ preventScroll: true });
     const { x, y } = getXY(event);
     if (event.pointerId !== undefined) activePointers.set(event.pointerId, { x, y });
-    downX = x; downY = y; lastX = x; lastY = y; downAt = Date.now();
+    downX = x; downY = y; lastX = x; lastY = y;
     isDragging = true;
     // Touching the screen always cancels any in-flight momentum coast — the
     // user clearly wants to grab the drum, not chase it.
     azVelocity = 0;
     lastMoveTime = performance.now();
+    longPressFired = false;
+    cancelLongPress();
+    // Arm the long-press timer. If it fires (TAP_MAX_MS) without movement /
+    // lift / second finger, we queue the card under the original down point.
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      // Bail if a second finger arrived (pinch) or the user drifted.
+      if (isPinching) return;
+      if (Math.hypot(lastX - downX, lastY - downY) > DRAG_THRESHOLD) return;
+      const ref = cardAtScreenPoint(downX, downY);
+      if (!ref) return;
+      longPressFired = true;
+      try { navigator.vibrate?.(15); } catch {}
+      void queueCard(ref);
+    }, TAP_MAX_MS);
     if (activePointers.size === 2) {
       const pts = Array.from(activePointers.values());
       pinchBaseDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
       pinchBaseZoom = mode.zoom;
       isPinching = true;
       controls.enabled = false; // freeze drum rotation while pinching
+      cancelLongPress();
     }
   }
   function onPointerMove(event: any) {
@@ -1729,6 +1928,13 @@ function initThree(
     lastX = x;
     lastY = y;
 
+    // If the user drifts off the down-point past the drag threshold, the
+    // gesture is a drag (rotation / lighting), not a long-press — cancel the
+    // pending timer so we don't queue under their finger mid-scroll.
+    if (longPressTimer && Math.hypot(x - downX, y - downY) > DRAG_THRESHOLD) {
+      cancelLongPress();
+    }
+
     // Vertical → lighting blend (unchanged).
     mode.lighting = clamp(mode.lighting - dy * 0.003, 0, 1);
 
@@ -1756,22 +1962,26 @@ function initThree(
     }
     if (activePointers.size > 0) return; // wait for all fingers to lift
     isDragging = false;
+    // Whichever way this lift goes, the pending long-press is done.
+    cancelLongPress();
+    // If the long-press timer already fired and queued a card, the gesture is
+    // resolved — don't double-treat the lift as a tap-to-play.
+    if (longPressFired) {
+      longPressFired = false;
+      return;
+    }
     const { x, y } = getXY(event);
     const dx = x - downX, dy = y - downY;
     if (Math.hypot(dx, dy) > DRAG_THRESHOLD) return;
-    if (Date.now() - downAt > 500) return;
-    mouse.x = (x / window.innerWidth) * 2 - 1;
-    mouse.y = -(y / window.innerHeight) * 2 + 1;
-    raycaster.setFromCamera(mouse, camera);
-    const hits = raycaster.intersectObjects(cardInstancedMeshes);
-    if (hits.length) {
-      const hit = hits[0];
-      const atlasIdx = cardInstancedMeshes.indexOf(hit.object as THREE.InstancedMesh);
-      const cellIdx = hit.instanceId;
-      const ref = atlasIdx >= 0 && cellIdx != null ? atlases[atlasIdx].cellRefs[cellIdx] : null;
-      if (ref) { selectCard(ref); lastTapAt = 0; return; }
+    // Only short presses reach here — anything ≥ TAP_MAX_MS was handled by
+    // the timer above (or cancelled by drag).
+    const ref = cardAtScreenPoint(x, y);
+    if (ref) {
+      selectCard(ref);
+      lastTapAt = 0;
+      return;
     }
-    // Empty space (chrome / background) — detect double tap → toggle zoom
+    // Empty space (chrome / background) — double-tap toggles zoom extreme.
     const now = Date.now();
     if (now - lastTapAt < DOUBLE_TAP_MS) {
       mode.zoom = mode.zoom > 0.5 ? 0 : 1;
@@ -2161,6 +2371,35 @@ function initThree(
         tr.halo.visible = false;
       }
     }
+
+    // Queue indicator fade — per-cell shader intensity lerp. Uses the same
+    // factors as the active card's LEDs (0.1 in, 0.2 out). Each atlas tracks
+    // a `highlightDirty` flag so we skip the loop entirely once every cell
+    // has reached its target.
+    for (const atlas of atlases) {
+      if (!atlas.highlightDirty) continue;
+      const cur = atlas.highlightCurrent;
+      const tgt = atlas.highlightTarget;
+      let stillFading = false;
+      for (let i = 0; i < atlas.capacity; i++) {
+        const target = tgt[i];
+        const current = cur[i];
+        if (target === current) continue;
+        const factor = target > current ? 0.1 : 0.2;
+        const next = current + (target - current) * factor;
+        // Snap to target once we're within a half percent, otherwise the
+        // dirty flag could oscillate forever as we asymptotically approach.
+        if (Math.abs(target - next) < 0.005) {
+          cur[i] = target;
+        } else {
+          cur[i] = next;
+          stillFading = true;
+        }
+      }
+      atlas.highlightAttr.needsUpdate = true;
+      atlas.highlightDirty = stillFading;
+    }
+
     // The previous back-of-drum cull (one JS loop hiding ~40% of cards each
     // frame) is gone — with all cards now in one InstancedMesh there's no
     // per-card draw-call cost left to claw back. The GPU still backface-culls
@@ -2185,6 +2424,7 @@ function initThree(
 
   return () => {
     cancelAnimationFrame(raf);
+    cancelLongPress();
     if (pollInterval !== null) clearInterval(pollInterval);
     window.removeEventListener('pointerdown', onPointerDown);
     window.removeEventListener('pointermove', onPointerMove);

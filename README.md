@@ -1,4 +1,4 @@
-# Juke.sh
+# juke.sh/BOX
 
 ![Loaded jukebox](docs/screenshots/demo.gif)
 
