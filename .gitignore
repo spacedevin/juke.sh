@@ -5,3 +5,9 @@ node_modules
 .DS_Store
 .claude
 tsconfig.tsbuildinfo
+.dry-run
+packages/*/dist
+packages/juke-cards/lib
+packages/jukebox/public/dist
+target
+Cargo.lock

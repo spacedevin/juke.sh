@@ -1,0 +1,182 @@
+import { useState, useEffect } from "lattish"
+import { savePrefs } from "../lib/preferences.tish"
+
+export const SPIN_MAX = 10
+export const SPIN_STEP = 0.25
+export const MIN_ROWS = 4
+export const MAX_ROWS = 20
+export const ZOOM_TIGHT_MIN = 0.4
+export const ZOOM_TIGHT_MAX = 1.2
+export const ZOOM_FLAT_STEP = 0.2
+
+export fn clampRows(n) {
+  let v = n | 0
+  if (v < MIN_ROWS) { return MIN_ROWS }
+  if (v > MAX_ROWS) { return MAX_ROWS }
+  return v
+}
+
+export fn clampSpin(n) {
+  if (n < -SPIN_MAX) { return -SPIN_MAX }
+  if (n > SPIN_MAX) { return SPIN_MAX }
+  return n
+}
+
+export fn clampZoomTight(n) {
+  if (n < ZOOM_TIGHT_MIN) { return ZOOM_TIGHT_MIN }
+  if (n > ZOOM_TIGHT_MAX) { return ZOOM_TIGHT_MAX }
+  return n
+}
+
+export fn clampZoomFlat(n) {
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
+export fn SettingsPanel({ modeRef, rows, onChangeRows, onClose }) {
+  let spinState = useState(modeRef.current.spin)
+  let spin = spinState[0]
+  let setSpin = spinState[1]
+  let showCatState = useState(modeRef.current.showCategories)
+  let showCategories = showCatState[0]
+  let setShowCategories = showCatState[1]
+  let zoomTightState = useState(modeRef.current.zoomTight)
+  let zoomTight = zoomTightState[0]
+  let setZoomTight = zoomTightState[1]
+  let zoomFlatState = useState(modeRef.current.zoomFlat)
+  let zoomFlat = zoomFlatState[0]
+  let setZoomFlat = zoomFlatState[1]
+  let audioState = useState(modeRef.current.audioEnabled)
+  let audioEnabled = audioState[0]
+  let setAudioEnabled = audioState[1]
+  let shuffleState = useState(modeRef.current.shuffle)
+  let shuffle = shuffleState[0]
+  let setShuffleLocal = shuffleState[1]
+
+  useEffect(() => {
+    fn onKey(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  fn updateSpin(v) { modeRef.current.spin = v; savePrefs({ spin: v }) }
+  fn updateShowCategories(v) { modeRef.current.showCategories = v; savePrefs({ showCategories: v }) }
+  fn updateZoomTight(v) { modeRef.current.zoomTight = v; savePrefs({ zoomTight: v }) }
+  fn updateZoomFlat(v) { modeRef.current.zoomFlat = v; savePrefs({ zoomFlat: v }) }
+  fn updateAudioEnabled(v) { modeRef.current.audioEnabled = v; savePrefs({ audioEnabled: v }) }
+  fn updateShuffle(v) { modeRef.current.shuffle = v; savePrefs({ shuffle: v }) }
+
+  fn onBackdropClick() { onClose() }
+  fn stopProp(ev) { ev.stopPropagation() }
+
+  fn onSpinInput(ev) {
+    let v = parseFloat(ev.target.value)
+    setSpin(v)
+    updateSpin(v)
+  }
+  fn onSpinZero() {
+    setSpin(0)
+    updateSpin(0)
+  }
+  fn onRowsInput(ev) {
+    onChangeRows(clampRows(parseInt(ev.target.value)))
+  }
+  fn onZoomTightInput(ev) {
+    let v = parseFloat(ev.target.value)
+    setZoomTight(v)
+    updateZoomTight(v)
+  }
+  fn onZoomFlatInput(ev) {
+    let v = parseFloat(ev.target.value)
+    setZoomFlat(v)
+    updateZoomFlat(v)
+  }
+  fn onShowCatChange(ev) {
+    let v = ev.target.checked
+    setShowCategories(v)
+    updateShowCategories(v)
+  }
+  fn onAudioChange(ev) {
+    let v = ev.target.checked
+    setAudioEnabled(v)
+    updateAudioEnabled(v)
+    if (modeRef.current.setAudioEnabled !== undefined) {
+      modeRef.current.setAudioEnabled(v)
+    }
+  }
+  fn onShuffleChange(ev) {
+    let v = ev.target.checked
+    setShuffleLocal(v)
+    updateShuffle(v)
+    if (modeRef.current.setShuffle !== undefined) {
+      modeRef.current.setShuffle(v)
+    }
+  }
+
+  return <div class="center-screen settings-backdrop" onclick={onBackdropClick}>
+    <div class="modal modal-narrow" onclick={stopProp}>
+      <div class="modal-title">SETTINGS</div>
+      <div class="modal-sub">5-tap anywhere to reopen · ESC to close</div>
+
+      <label class="set-row">
+        <div class="set-label">
+          <span>ROTATION SPEED [←/→]</span>
+          <span class="set-val">{spin.toFixed(2) + " cards/s"}</span>
+        </div>
+        <input type="range" min={-SPIN_MAX} max={SPIN_MAX} step={SPIN_STEP} value={spin} oninput={onSpinInput} />
+        <button class="set-zero" onclick={onSpinZero} title="Stop">⏹</button>
+      </label>
+
+      <label class="set-row">
+        <div class="set-label">
+          <span>ROWS PER COLUMN [↑/↓]</span>
+          <span class="set-val">{String(rows)}</span>
+        </div>
+        <input type="range" min={MIN_ROWS} max={MAX_ROWS} step={1} value={rows} oninput={onRowsInput} />
+      </label>
+
+      <label class="set-row">
+        <div class="set-label">
+          <span>ZOOM-IN TIGHTNESS [Z/X]</span>
+          <span class="set-val">{zoomTight.toFixed(2) + "×"}</span>
+        </div>
+        <input type="range" min={ZOOM_TIGHT_MIN} max={ZOOM_TIGHT_MAX} step={0.05} value={zoomTight} oninput={onZoomTightInput} />
+      </label>
+      <div class="set-hint">Lower = crops chrome / cards fill more of the screen. Z / X keys nudge this too.</div>
+
+      <label class="set-row">
+        <div class="set-label">
+          <span>ZOOM-IN FLATNESS [V]</span>
+          <span class="set-val">{String(Math.round(zoomFlat * 100)) + "%"}</span>
+        </div>
+        <input type="range" min={0} max={1} step={0.05} value={zoomFlat} oninput={onZoomFlatInput} />
+      </label>
+      <div class="set-hint">Higher = longer telephoto lens, cards look flatter / less 3D when zoomed in. V key cycles too.</div>
+
+      <label class="set-row set-toggle">
+        <span>CATEGORY LABELS [C]</span>
+        <input type="checkbox" checked={showCategories} onchange={onShowCatChange} />
+      </label>
+
+      <label class="set-row set-toggle">
+        <span>AUDIO [M]</span>
+        <input type="checkbox" checked={audioEnabled} onchange={onAudioChange} />
+      </label>
+
+      <label class="set-row set-toggle">
+        <span>SHUFFLE [S]</span>
+        <input type="checkbox" checked={shuffle} onchange={onShuffleChange} />
+      </label>
+
+      <div class="modal-actions">
+        <button class="sp-btn" onclick={onClose}>DONE</button>
+      </div>
+    </div>
+  </div>
+}

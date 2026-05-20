@@ -1,0 +1,463 @@
+import { useState, useEffect, useRef } from "lattish"
+import { navigateRaw } from "../router.tish"
+import {
+  isLoggedIn, login, getStoredClientId,
+  loadAllTracks, getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
+  getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
+} from "../lib/spotify.tish"
+import { generateDebugTracks } from "../lib/debug-tracks.tish"
+import { preloadCardFonts } from "../../../juke-cards/src/index.tish"
+import { loadPrefs, savePrefs, flushPrefs } from "../lib/preferences.tish"
+import { opt } from "../lib/utils.tish"
+import { PlaylistPicker } from "./PlaylistPicker.tish"
+import {
+  SettingsPanel,
+  clampRows, clampSpin, clampZoomTight, clampZoomFlat,
+  SPIN_STEP, ZOOM_FLAT_STEP, MIN_ROWS, MAX_ROWS,
+} from "./SettingsPanel.tish"
+
+const DEFAULT_ROWS = 10
+const ZOOM_TIGHT_DEFAULT = 0.95
+const PLAYBACK_TOAST_MS = 6000
+const TAP_BURST_MS = 800
+const TAP_MOVE_MAX = 8
+const TAP_DURATION_MAX = 250
+
+fn clampUnit(n) {
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
+fn idsToObject(arr) {
+  let out = {}
+  if (!Array.isArray(arr)) { return out }
+  let i = 0
+  while (i < arr.length) {
+    out[arr[i]] = true
+    i = i + 1
+  }
+  return out
+}
+
+fn objectToIds(obj) {
+  let out = []
+  let keys = Object.keys(obj)
+  let i = 0
+  while (i < keys.length) {
+    if (obj[keys[i]]) { out.push(keys[i]) }
+    i = i + 1
+  }
+  return out
+}
+
+export fn Jukebox({ debug, rows: initialRows }) {
+  if (debug === null || debug === undefined) { debug = false }
+  if (initialRows === null || initialRows === undefined) { initialRows = DEFAULT_ROWS }
+
+  let containerRef = useRef(null)
+  let phaseState = useState("init")
+  let phase = phaseState[0]
+  let setPhase = phaseState[1]
+
+  let initialPrefs = loadPrefs()
+  let rowsState = useState(clampRows(opt(initialPrefs, "rows", initialRows)))
+  let rows = rowsState[0]
+  let setRows = rowsState[1]
+
+  let loadingState = useState("Loading…")
+  let loadingMsg = loadingState[0]
+  let setLoadingMsg = loadingState[1]
+
+  let errorState = useState("")
+  let errorMsg = errorState[0]
+  let setErrorMsg = errorState[1]
+
+  let playlistsState = useState([])
+  let userPlaylists = playlistsState[0]
+  let setUserPlaylists = playlistsState[1]
+
+  let pickedState = useState({})
+  let pickedIds = pickedState[0]
+  let setPickedIds = pickedState[1]
+
+  let cachedState = useState({})
+  let cachedIds = cachedState[0]
+  let setCachedIds = cachedState[1]
+
+  let hintsState = useState(true)
+  let showHints = hintsState[0]
+  let setShowHints = hintsState[1]
+
+  let settingsState = useState(false)
+  let showSettings = settingsState[0]
+  let setShowSettings = settingsState[1]
+
+  let playbackState = useState("")
+  let playbackMsg = playbackState[0]
+  let setPlaybackMsg = playbackState[1]
+
+  let playbackMsgTimer = useRef(null)
+  let rowsRef = useRef(rows)
+  rowsRef.current = rows
+  let cleanupRef = useRef(null)
+  let tracksDataRef = useRef(null)
+  let mountedRef = useRef(true)
+
+  let modeRef = useRef({
+    lighting: clampUnit(opt(initialPrefs, "lighting", 0.5)),
+    zoom: 0,
+    spin: clampSpin(opt(initialPrefs, "spin", 0)),
+    debug: debug,
+    showCategories: opt(initialPrefs, "showCategories", true),
+    zoomTight: clampZoomTight(opt(initialPrefs, "zoomTight", ZOOM_TIGHT_DEFAULT)),
+    zoomFlat: clampZoomFlat(opt(initialPrefs, "zoomFlat", 0)),
+    audioEnabled: opt(initialPrefs, "audioEnabled", true),
+    shuffle: opt(initialPrefs, "shuffle", true),
+  })
+
+  fn showPlaybackError(msg) {
+    if (!mountedRef.current) { return }
+    setPlaybackMsg(msg)
+    if (playbackMsgTimer.current !== null) { clearTimeout(playbackMsgTimer.current) }
+    playbackMsgTimer.current = setTimeout(() => {
+      if (mountedRef.current) { setPlaybackMsg("") }
+    }, PLAYBACK_TOAST_MS)
+  }
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+      if (playbackMsgTimer.current !== null) { clearTimeout(playbackMsgTimer.current) }
+    }
+  }, [])
+
+  async fn fetchPlaylistsAndPick() {
+    setPhase("fetching-playlists")
+    setLoadingMsg("Loading your playlists…")
+    try {
+      let pls = await getUserPlaylists()
+      if (!mountedRef.current) { return }
+      setUserPlaylists(pls)
+      setPhase("picking")
+    } catch (e) {
+      if (!mountedRef.current) { return }
+      let m = String(e)
+      if (e !== null && typeof e === "object" && "message" in e) { m = String(e.message) }
+      setErrorMsg(m !== "" ? m : "Failed to load playlists")
+      setPhase("error")
+    }
+  }
+
+  async fn hydrateTracks(ids) {
+    setPhase("loading-tracks")
+    setLoadingMsg("Loading tracks…")
+    try {
+      let data = getCachedTracks(ids)
+      if (data === null) {
+        let fresh = await loadAllTracks(ids)
+        if (!mountedRef.current) { return }
+        if (fresh.tracks.length > 0) {
+          setCachedTracks(ids, fresh.tracks, fresh.nowItem)
+        }
+        data = fresh
+      }
+      if (data.tracks.length === 0) {
+        if (!mountedRef.current) { return }
+        setErrorMsg("No tracks found in the selected playlists.")
+        setPhase("error")
+        return
+      }
+      setLoadingMsg("Building jukebox…")
+      try { await preloadCardFonts() } catch (e) { }
+      if (!mountedRef.current) { return }
+      tracksDataRef.current = { tracks: data.tracks, nowItem: data.nowItem }
+      setPhase("ready")
+    } catch (e) {
+      if (!mountedRef.current) { return }
+      let m = String(e)
+      if (e !== null && typeof e === "object" && "message" in e) { m = String(e.message) }
+      setErrorMsg(m !== "" ? m : "Failed to load tracks")
+      setPhase("error")
+    }
+  }
+
+  useEffect(() => {
+    if (debug) {
+      async fn loadDebug() {
+        try { await preloadCardFonts() } catch (e) { }
+        if (!mountedRef.current) { return }
+        tracksDataRef.current = { tracks: generateDebugTracks(120), nowItem: null }
+        setPhase("ready")
+      }
+      loadDebug()
+      return
+    }
+
+    if (!isLoggedIn()) {
+      if (getStoredClientId() !== "") {
+        login()
+      } else {
+        navigateRaw("/")
+      }
+      return
+    }
+
+    setPickedIds(idsToObject(getSelectedPlaylists()))
+    setCachedIds(idsToObject(getCachedPlaylistIds()))
+    fetchPlaylistsAndPick()
+  }, [])
+
+  useEffect(() => {
+    if (phase !== "ready") { return () => {} }
+    let data = tracksDataRef.current
+    if (data === null || containerRef.current === null) { return () => {} }
+    if (window.__jukeBridge === null || window.__jukeBridge === undefined) { return () => {} }
+
+    let m = modeRef.current
+    let scene = window.__jukeBridge.createJukeboxScene(containerRef.current, {
+      tracks: data.tracks,
+      nowItem: data.nowItem,
+      onActiveChange: (hasActive) => {
+        if (mountedRef.current) { setShowHints(!hasActive) }
+      },
+      onPlaybackError: showPlaybackError,
+      lighting: m.lighting,
+      zoom: m.zoom,
+      spin: m.spin,
+      debug: debug,
+      showCategories: m.showCategories,
+      zoomTight: m.zoomTight,
+      zoomFlat: m.zoomFlat,
+      audioEnabled: m.audioEnabled,
+      shuffle: m.shuffle,
+      rows: rows,
+    })
+    modeRef.current = scene.mode
+    cleanupRef.current = scene.dispose
+
+    return () => {
+      if (cleanupRef.current !== null) { cleanupRef.current() }
+      cleanupRef.current = null
+      if (mountedRef.current) { setShowHints(true) }
+    }
+  }, [phase, rows])
+
+  useEffect(() => {
+    fn onKey(ev) {
+      let t = ev.target
+      if (t !== null && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) { return }
+
+      if (ev.key === "c" || ev.key === "C") {
+        ev.preventDefault()
+        modeRef.current.showCategories = !modeRef.current.showCategories
+        savePrefs({ showCategories: modeRef.current.showCategories })
+      } else if (ev.key === "ArrowLeft") {
+        ev.preventDefault()
+        modeRef.current.spin = clampSpin(modeRef.current.spin + SPIN_STEP)
+        savePrefs({ spin: modeRef.current.spin })
+      } else if (ev.key === "ArrowRight") {
+        ev.preventDefault()
+        modeRef.current.spin = clampSpin(modeRef.current.spin - SPIN_STEP)
+        savePrefs({ spin: modeRef.current.spin })
+      } else if (ev.key === "ArrowUp") {
+        ev.preventDefault()
+        let n = Math.min(MAX_ROWS, rowsRef.current + 1)
+        setRows(n)
+        savePrefs({ rows: n })
+      } else if (ev.key === "ArrowDown") {
+        ev.preventDefault()
+        let n = Math.max(MIN_ROWS, rowsRef.current - 1)
+        setRows(n)
+        savePrefs({ rows: n })
+      } else if (ev.key === "z" || ev.key === "Z") {
+        ev.preventDefault()
+        modeRef.current.zoomTight = clampZoomTight(modeRef.current.zoomTight - 0.05)
+        savePrefs({ zoomTight: modeRef.current.zoomTight })
+      } else if (ev.key === "x" || ev.key === "X") {
+        ev.preventDefault()
+        modeRef.current.zoomTight = clampZoomTight(modeRef.current.zoomTight + 0.05)
+        savePrefs({ zoomTight: modeRef.current.zoomTight })
+      } else if (ev.key === "v" || ev.key === "V") {
+        ev.preventDefault()
+        let next = modeRef.current.zoomFlat + ZOOM_FLAT_STEP
+        if (next > 1.0001) { next = 0 }
+        modeRef.current.zoomFlat = clampZoomFlat(next)
+        savePrefs({ zoomFlat: modeRef.current.zoomFlat })
+      } else if (ev.key === "m" || ev.key === "M") {
+        ev.preventDefault()
+        let next = !modeRef.current.audioEnabled
+        modeRef.current.audioEnabled = next
+        savePrefs({ audioEnabled: next })
+        if (modeRef.current.setAudioEnabled !== undefined) {
+          modeRef.current.setAudioEnabled(next)
+        }
+      } else if (ev.key === "s" || ev.key === "S") {
+        ev.preventDefault()
+        let next = !modeRef.current.shuffle
+        modeRef.current.shuffle = next
+        savePrefs({ shuffle: next })
+        if (modeRef.current.setShuffle !== undefined) {
+          modeRef.current.setShuffle(next)
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
+  let tapTimes = useRef([])
+  let pdAt = 0
+  let pdX = 0
+  let pdY = 0
+
+  useEffect(() => {
+    fn onDown(ev) {
+      pdAt = Date.now()
+      pdX = ev.clientX
+      pdY = ev.clientY
+    }
+    fn onUp(ev) {
+      savePrefs({ lighting: modeRef.current.lighting })
+      let dur = Date.now() - pdAt
+      let dx = ev.clientX - pdX
+      let dy = ev.clientY - pdY
+      let dist = Math.sqrt(dx * dx + dy * dy)
+      if (dur > TAP_DURATION_MAX || dist > TAP_MOVE_MAX) { return }
+      let now = Date.now()
+      let kept = []
+      let i = 0
+      while (i < tapTimes.current.length) {
+        if (now - tapTimes.current[i] < TAP_BURST_MS) { kept.push(tapTimes.current[i]) }
+        i = i + 1
+      }
+      kept.push(now)
+      if (kept.length > 5) {
+        kept = kept.slice(kept.length - 5)
+      }
+      tapTimes.current = kept
+      if (tapTimes.current.length >= 5) {
+        tapTimes.current = []
+        setShowSettings(true)
+      }
+    }
+    fn onHide() {
+      savePrefs({
+        lighting: modeRef.current.lighting,
+        spin: modeRef.current.spin,
+        showCategories: modeRef.current.showCategories,
+        zoomTight: modeRef.current.zoomTight,
+        audioEnabled: modeRef.current.audioEnabled,
+        shuffle: modeRef.current.shuffle,
+      })
+      flushPrefs()
+    }
+    window.addEventListener("pointerdown", onDown)
+    window.addEventListener("pointerup", onUp)
+    window.addEventListener("pointercancel", onUp)
+    document.addEventListener("visibilitychange", onHide)
+    return () => {
+      window.removeEventListener("pointerdown", onDown)
+      window.removeEventListener("pointerup", onUp)
+      window.removeEventListener("pointercancel", onUp)
+      document.removeEventListener("visibilitychange", onHide)
+    }
+  }, [])
+
+  fn togglePicked(id) {
+    let next = {}
+    let keys = Object.keys(pickedIds)
+    let i = 0
+    while (i < keys.length) {
+      if (keys[i] !== id) { next[keys[i]] = pickedIds[keys[i]] }
+      i = i + 1
+    }
+    if (!(id in pickedIds) || !pickedIds[id]) { next[id] = true }
+    setPickedIds(next)
+  }
+
+  fn confirmSelection() {
+    let ids = objectToIds(pickedIds)
+    if (ids.length === 0) { return }
+    saveSelectedPlaylists(ids)
+    hydrateTracks(ids)
+  }
+
+  fn flushCache() {
+    clearTracksCache()
+    setCachedIds({})
+  }
+
+  fn onRetry() {
+    setErrorMsg("")
+    fetchPlaylistsAndPick()
+  }
+
+  fn onDismissPlayback() { setPlaybackMsg("") }
+
+  fn onCloseSettings() { setShowSettings(false) }
+
+  fn onChangeRows(n) {
+    setRows(n)
+    savePrefs({ rows: n })
+  }
+
+  let containerStyle = { visibility: phase === "ready" ? "visible" : "hidden", outline: "none" }
+
+  return <div class="jukebox-root">
+    <div ref={containerRef} id="webgl-container" tabindex={-1} style={containerStyle} />
+
+    {phase === "ready"
+      ? <div id="ui-overlay">
+          {showHints
+            ? <div>
+                <div class="instruction-badge">TAP TO PLAY • HOLD TO QUEUE</div>
+                <div class="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM</div>
+                <div class="instruction-subtitle">5-TAP FOR SETTINGS</div>
+              </div>
+            : null}
+          {playbackMsg !== ""
+            ? <div class="playback-toast" onclick={onDismissPlayback}>{playbackMsg}</div>
+            : null}
+        </div>
+      : null}
+
+    {phase === "init"
+      ? <div class="center-screen"><div class="spinner" /></div>
+      : null}
+
+    {phase === "fetching-playlists" || phase === "loading-tracks"
+      ? <div class="center-screen">
+          <div class="spinner" />
+          <div class="loading-text">{loadingMsg}</div>
+        </div>
+      : null}
+
+    {phase === "error"
+      ? <div class="center-screen">
+          <div class="loading-text error-text">{errorMsg}</div>
+          <button class="sp-btn" type="button" onclick={onRetry}>RETRY</button>
+        </div>
+      : null}
+
+    {phase === "picking"
+      ? <PlaylistPicker
+          userPlaylists={userPlaylists}
+          pickedIds={pickedIds}
+          cachedIds={cachedIds}
+          onToggle={togglePicked}
+          onConfirm={confirmSelection}
+          onFlushCache={flushCache}
+        />
+      : null}
+
+    {showSettings
+      ? <SettingsPanel
+          modeRef={modeRef}
+          rows={rows}
+          onChangeRows={onChangeRows}
+          onClose={onCloseSettings}
+        />
+      : null}
+  </div>
+}

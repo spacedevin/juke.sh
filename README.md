@@ -2,58 +2,80 @@
 
 ![Loaded jukebox](docs/screenshots/demo.gif)
 
+3D Spotify jukebox modeled after a chrome-and-neon 50s diner record machine. Three.js scene, full procedural card art ([`@spacedevin/juke-cards`](packages/juke-cards)), real Spotify integration — your playlists become the records on the drum.
 
-3D Spotify jukebox modeled after a chrome-and-neon 50s diner record machine. Three.js scene, full procedural card art, real Spotify integration — your playlists become the records on the drum.
+Built as a **Tish + Lattish** static SPA (no Next.js server). Uses PKCE auth — each user authenticates with their own Spotify account and all API calls go directly from their browser to Spotify.
 
-Uses PKCE auth — each user authenticates with their own Spotify account and all API calls go directly from their browser to Spotify (no shared rate limit on a server proxy).
+## Monorepo
+
+```
+packages/
+  juke-cards/   @spacedevin/juke-cards — procedural canvas card art (npm)
+  jukebox/      Lattish SPA served from public/
+  bridges/      Three.js + Tone.js vendor bundle (JS shim)
+```
 
 ## Setup
 
 1. Create an app at https://developer.spotify.com/dashboard
-2. Add redirect URIs (one per environment you'll run on):
-   - `https://juke.sh/callback` (juke server)
+2. Add redirect URIs:
+   - `https://juke.sh/callback`
    - `http://127.0.0.1:3000/callback` (local dev)
-3. Copy `.env.local.example` to `.env.local`, fill in `NEXT_PUBLIC_SPOTIFY_CLIENT_ID`
-4. `npm install && npm run dev`
-5. Visit `http://127.0.0.1:3000` → click **LOGIN WITH SPOTIFY**
-6. On the playlist picker, choose one or more playlists to load into the deck
+3. `npm install`
+4. Copy `.env.local.example` to `.env.local` and set `NEXT_PUBLIC_SPOTIFY_CLIENT_ID`
+5. `just dev` — serves on http://127.0.0.1:3000
+6. Visit `/` → **LOGIN WITH SPOTIFY** (Client ID is pre-filled from `.env.local`)
+7. On `/box`, pick playlists to load into the deck
 
-Playback requires an active Spotify device — open Spotify somewhere on your account (desktop app, phone, web player, etc.) so the API has something to send `play` / `pause` / `next` to.
+No client secret needed — PKCE auth is browser-only. The Client ID is public and is baked into `public/dist/config.js` at build time (same as the old `NEXT_PUBLIC_` Next.js flow).
+
+For production (Vercel, etc.), set `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` or `SPOTIFY_CLIENT_ID` in the host's environment variables at build time. You can still paste a Client ID on `/` instead — it is stored in `localStorage` and overrides the baked default.
+
+Playback requires an active Spotify device (desktop app, phone, web player, etc.).
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `just dev` | Build + Tish dev server (`:3000`, SPA fallback) |
+| `just build` | Cards + vendor + Lattish bundles → `packages/jukebox/public/dist/` |
+| `just test` | juke-cards smoke tests |
+| `just fmt` / `just lint` | Tish format/lint (requires `TISH_ROOT` cargo binaries) |
+
+See [docs/TISH_TOOLING.md](docs/TISH_TOOLING.md) for compiler install and CI notes.
+
+## Local development
+
+From the repo root:
+
+```bash
+npm install
+cp .env.local.example .env.local   # add your Spotify Client ID
+just dev    # http://127.0.0.1:3000 — register this callback URL in Spotify
+```
+
+To test on a phone over the network, use a tunnel (e.g. `ngrok http 3000`) and add `https://YOUR-TUNNEL/callback` to your Spotify app's redirect URIs. The dev server logs OAuth hits on `/callback`.
 
 ## Routes
 
-- `/` — landing page. Auto-redirects to `/box` if you're already signed in.
-- `/box` — the jukebox app. Loads tokens from `localStorage`; if missing, shows just the login button (no full landing graphics).
-- `/dev` — login-less visual playground with procedural fake tracks. Works in production too.
-- `/callback` — OAuth redirect target.
+- `/` — landing (Client ID + login)
+- `/box` — jukebox app
+- `/dev` — procedural debug tracks (no Spotify)
+- `/callback` — OAuth redirect
+- `/logout` — clear session
 
-Arrow keys nudge the auto-rotation (←/→) and row count (↑/↓); `C` toggles category labels. Default is no auto-spin.
+Arrow keys: spin (←/→), rows (↑/↓). `C` category labels, `M` audio, `S` shuffle, `Z`/`X` zoom tight, `V` telephoto flatness.
 
-Routes are case-insensitive via middleware (`/BOX`, `/Box`, etc. all 308 → `/box`).
+## Deploy (Vercel)
 
-## Controls
+Root directory: `packages/jukebox`. Output: `public/`. Config in `vercel.json`.
 
-- **Tap a card** — play that track on your active Spotify device.
-- **Tap an already-playing card** — deselect.
-- **Drag left/right** — spin the jukebox. Rotation speed auto-scales with the size of the deck so a 1000-track jukebox doesn't whip past you.
-- **Drag up/down** — continuously blend between Roller-Rink (up) and Classic Diner (down) lighting.
-- **Scroll wheel / pinch** — continuously zoom between fit-to-screen and tight-on-cards.
-- **Double-tap empty chrome** — snap zoom between min and max.
-- The currently playing track illuminates with edge LEDs + four tracker LEDs that converge along the top rim from opposite sides so you can always find your way home.
+Set `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` or `SPOTIFY_CLIENT_ID` in the Vercel project's environment variables (build time). The build writes it to `public/dist/config.js`.
 
-## Caching
+## Card art package
 
-- Selected playlists are saved to `localStorage` (`jukebox_selected_playlists`).
-- Their assembled track lists are cached for 1 hour, keyed by the sorted set of selected IDs (`jukebox_tracks_cache`).
-- The picker modal always shows on refresh with previous picks pre-selected; selecting the same set hits the cache, selecting a different set re-fetches.
-- A green `● CACHED` chip appears in the picker next to any playlist whose tracks are currently cached. Click it to flush and re-fetch on next load.
-
-## Notes
-
-- No client secret needed — PKCE auth is browser-only.
-- Tokens stored in `localStorage`; access token refresh handled automatically.
-- The `NEXT_PUBLIC_` prefix on the client ID means it ships in the JS bundle, which is fine — Spotify client IDs are public; only the secret would be sensitive (and PKCE doesn't use one).
-- Spotify-owned algorithmic playlists (IDs starting with `37i9...` — Daily Mix, Discover Weekly, editorial picks) were locked down by Spotify in late 2024 and now return 404 to the Web API. The picker only shows playlists you own or follow, which is the correct accessible set.
+Procedural 256×100 slot cards live in [`@spacedevin/juke-cards`](packages/juke-cards). Demo grid: `packages/juke-cards/demo/index.html` (after `npm run build --workspace=@spacedevin/juke-cards`).
 
 ## License
+
 PIF

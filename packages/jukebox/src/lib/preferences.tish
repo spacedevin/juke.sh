@@ -1,0 +1,67 @@
+// View preferences persisted to localStorage:
+//   - spin            ←/→ arrow-key auto-rotation rate (rad/sec)
+//   - rows            ↑/↓ arrow-key row count (4..20)
+//   - lighting        vertical-drag blend (0 diner ↔ 1 rink)
+//   - showCategories  'C' key toggle for bottom-rim labels
+//
+// Saves are debounced so continuous inputs (lighting drag) don't hammer
+// localStorage on every pointermove sample.
+
+const KEY = "jukebox_prefs"
+const SAVE_DEBOUNCE_MS = 250
+
+fn mergeObj(base, patch) {
+  let out = {}
+  let keys = Object.keys(base)
+  let i = 0
+  while (i < keys.length) {
+    out[keys[i]] = base[keys[i]]
+    i = i + 1
+  }
+  keys = Object.keys(patch)
+  i = 0
+  while (i < keys.length) {
+    out[keys[i]] = patch[keys[i]]
+    i = i + 1
+  }
+  return out
+}
+
+export fn loadPrefs() {
+  if (typeof window === "undefined") { return {} }
+  try {
+    let raw = localStorage.getItem(KEY)
+    if (raw === null) { return {} }
+    let p = JSON.parse(raw)
+    if (p === null || typeof p !== "object") { return {} }
+    return p
+  } catch (e) {
+    return {}
+  }
+}
+
+let pending = {}
+let saveTimer = null
+
+fn flush() {
+  saveTimer = null
+  try {
+    let existing = loadPrefs()
+    localStorage.setItem(KEY, JSON.stringify(mergeObj(existing, pending)))
+  } catch (e) { }
+  pending = {}
+}
+
+export fn savePrefs(patch) {
+  pending = mergeObj(pending, patch)
+  if (saveTimer !== null) { clearTimeout(saveTimer) }
+  saveTimer = setTimeout(flush, SAVE_DEBOUNCE_MS)
+}
+
+// Force a synchronous flush — call from unload/visibility-hidden handlers so
+// in-flight debounced writes don't get lost.
+export fn flushPrefs() {
+  if (saveTimer !== null) { clearTimeout(saveTimer) }
+  let keys = Object.keys(pending)
+  if (keys.length > 0) { flush() }
+}

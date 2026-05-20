@@ -1,0 +1,76 @@
+import { useState, useEffect } from "lattish"
+import { isLoggedIn, login, getStoredClientId, getBootClientId, setStoredClientId } from "../lib/spotify.tish"
+
+export fn Landing() {
+  let clientState = useState("")
+  let clientId = clientState[0]
+  let setClientId = clientState[1]
+  let loggedState = useState(false)
+  let loggedIn = loggedState[0]
+  let setLoggedIn = loggedState[1]
+
+  useEffect(() => {
+    let onLocalhost = false
+    if (typeof window !== "undefined") {
+      let h = window.location.hostname
+      onLocalhost = h === "localhost" || h === "127.0.0.1"
+    }
+    setLoggedIn(isLoggedIn() || onLocalhost)
+    let id = getStoredClientId()
+    if (id === "") { id = getBootClientId() }
+    setClientId(id)
+  }, [])
+
+  fn onSubmit(ev) {
+    ev.preventDefault()
+    setStoredClientId(clientId)
+    login()
+  }
+
+  fn onClientInput(ev) {
+    setClientId(ev.target.value)
+  }
+
+  if (loggedIn) {
+    return <div class="center-screen">
+      <div class="landing-title">juke.sh/BOX</div>
+      <div class="landing-tag">Spotify WebGL Jukebox</div>
+      <br />
+      <div class="auth-form">
+        <a class="sp-btn" href="/box">ENTER THE JUKEBOX</a>
+        <a class="sp-btn sp-btn-secondary" href="/logout">LOG OUT</a>
+        <div class="auth-hint">
+          {"You're signed in to Spotify."}
+          <br /><br /><br /><br /><br />
+          <a href="/dev">Or take it for a test spin →</a>
+        </div>
+      </div>
+    </div>
+  }
+
+  return <div class="center-screen">
+    <div class="landing-title">juke.sh/BOX</div>
+    <div class="landing-tag">Spotify WebGL Jukebox</div>
+    <br />
+    <form class="auth-form" onsubmit={onSubmit}>
+      <input
+        class="client-id-input"
+        type="text"
+        autocomplete="off"
+        spellcheck={false}
+        placeholder="Spotify Client ID"
+        value={clientId}
+        oninput={onClientInput}
+      />
+      <button class="sp-btn" type="submit">LOGIN WITH SPOTIFY</button>
+      <div class="auth-hint">
+        {"Create a Spotify app to get a Client ID (free, takes ~1 minute). "}
+        <a href="https://github.com/spacedevin/juke.sh/blob/main/USER_GUIDE.md" target="_blank" rel="noopener noreferrer">
+          How →
+        </a>
+        <br /><br /><br /><br /><br />
+        <a href="/dev">Take it for a test spin without an ID →</a>
+      </div>
+    </form>
+  </div>
+}

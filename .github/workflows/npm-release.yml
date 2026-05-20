@@ -1,0 +1,33 @@
+name: NPM release (juke-cards)
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Publish @spacedevin/juke-cards
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+
+      - name: Download tarball from release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ASSETS='${{ toJSON(github.event.release.assets) }}'
+          URL=$(echo "$ASSETS" | jq -r '.[] | select(.name == "juke-cards-npm-package.tgz") | .url')
+          test -n "$URL" && test "$URL" != "null"
+          curl -sL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/octet-stream" "$URL" -o juke-cards-npm-package.tgz
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - run: npm publish juke-cards-npm-package.tgz --access public

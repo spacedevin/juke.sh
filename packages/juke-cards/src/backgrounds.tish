@@ -1,0 +1,2 @@
+// Layer 1 background styles (bgStyle 0–45) — implemented in generate.tish.
+// Kept as a module anchor for future extraction; generateCardArt inlines this layer today.
