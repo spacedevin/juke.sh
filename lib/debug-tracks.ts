@@ -1,10 +1,6 @@
 // Procedural fake tracks for visual debugging — adapted from the spin7.html
 // prototype. Pure data + a deterministic generator; no network, no Spotify.
-//
-// Webpack/Next strips `process.env.NODE_ENV === 'production'` branches at
-// build time, so consumers should always gate dynamic imports of this file
-// behind that check. Combined with the localhost-only `isDebugAllowed` guard,
-// the debug code path is unreachable in production deployments.
+// Used by the /dev route in both dev and production builds.
 
 import type { JukeTrack } from './spotify-client';
 
@@ -49,8 +45,3 @@ export function generateDebugTracks(count = 120): JukeTrack[] {
   return out;
 }
 
-export function isDebugAllowed(): boolean {
-  if (typeof window === 'undefined') return false;
-  const h = window.location.hostname;
-  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
-}

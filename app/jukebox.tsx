@@ -15,16 +15,15 @@ import {
 type Phase = 'init' | 'fetching-playlists' | 'picking' | 'loading-tracks' | 'ready' | 'error';
 
 // How many cards stacked vertically per column. Configurable per-Jukebox via
-// the `rows` prop and live-tweakable in demo mode via the up/down arrow keys.
+// the `rows` prop and live-tweakable at runtime via the up/down arrow keys.
 const DEFAULT_ROWS = 10;
 const MIN_ROWS = 4;
 const MAX_ROWS = 20;
 
 export default function Jukebox({
-  demo = false,
   debug = false,
   rows: initialRows = DEFAULT_ROWS,
-}: { demo?: boolean; debug?: boolean; rows?: number } = {}) {
+}: { debug?: boolean; rows?: number } = {}) {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<Phase>('init');
@@ -40,11 +39,13 @@ export default function Jukebox({
   const modeRef = useRef<{
     lighting: number; // 0 = classic diner, 1 = roller rink
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
-    demoSpin: number; // radians/SECOND for demo orbit (0 = off). Time-based so
+    spin: number;     // radians/SECOND auto-orbit (0 = off). Time-based so
                       // the speed stays identical at 60 vs 120 fps displays.
+                      // Arrow keys nudge this up/down; defaults to 0.
     debug: boolean;   // procedural tracks, no Spotify API
+    showCategories: boolean; // bottom-rim category labels toggled by 'C'
     goToActiveCard?: () => void;
-  }>({ lighting: 1, zoom: 0, demoSpin: demo ? 0.18 : 0, debug });
+  }>({ lighting: 1, zoom: 0, spin: 0, debug, showCategories: true });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
   const tracksDataRef = useRef<{ tracks: any[]; nowItem: any } | null>(null);
@@ -56,18 +57,12 @@ export default function Jukebox({
   // Boot — always show the picker on refresh, but preselect whatever was used
   // last time. Cached tracks for the same id set will short-circuit the fetch.
   useEffect(() => {
-    // Dev-only / localhost-only short-circuit. Loads procedural debug tracks
-    // and skips auth, picker, and the Spotify API entirely. Dynamic import +
-    // the NODE_ENV check ensures the data module gets tree-shaken from
-    // production builds.
-    if (debug && process.env.NODE_ENV !== 'production') {
+    // Debug shortcut — loads procedural fake tracks instead of hitting Spotify.
+    // Available in production too (used by /dev for visual demos / recordings
+    // without anyone needing to log in).
+    if (debug) {
       void (async () => {
         const m = await import('@/lib/debug-tracks');
-        if (!m.isDebugAllowed()) {
-          setErrorMsg('Debug mode is only available on localhost in dev builds.');
-          setPhase('error');
-          return;
-        }
         try { await (document as any).fonts?.ready; } catch {}
         if (!mountedRef.current) return;
         tracksDataRef.current = { tracks: m.generateDebugTracks(120), nowItem: null };
@@ -83,7 +78,7 @@ export default function Jukebox({
   }, [router, debug]);
 
   // Mount the Three.js scene once we hit `ready` AND the data is staged.
-  // Re-mounts whenever `rows` changes (demo arrow-key adjustment).
+  // Re-mounts whenever `rows` changes (↑/↓ arrow-key adjustment).
   useEffect(() => {
     if (phase !== 'ready') return;
     const data = tracksDataRef.current;
@@ -97,18 +92,24 @@ export default function Jukebox({
     };
   }, [phase, rows]);
 
-  // Demo mode keyboard controls:
-  //  ←/→ slow down / speed up rotation (mutates modeRef in place)
-  //  ↑/↓ remove / add a row (triggers full scene rebuild via setRows)
+  // Keyboard controls (available on every route, suppressed inside form fields).
+  //  C       toggle category labels
+  //  ←/→     auto-rotation speed
+  //  ↑/↓     add / remove a row (triggers scene rebuild)
   useEffect(() => {
-    if (!demo) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'ArrowLeft') {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
-        modeRef.current.demoSpin = Math.max(-1.5, modeRef.current.demoSpin - 0.05);
+        modeRef.current.showCategories = !modeRef.current.showCategories;
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        modeRef.current.spin = Math.min(1.5, modeRef.current.spin + 0.05);
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        modeRef.current.demoSpin = Math.min(1.5, modeRef.current.demoSpin + 0.05);
+        modeRef.current.spin = Math.max(-1.5, modeRef.current.spin - 0.05);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setRows(r => Math.min(MAX_ROWS, r + 1));
@@ -119,7 +120,7 @@ export default function Jukebox({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [demo]);
+  }, []);
 
   async function fetchPlaylistsAndPick() {
     setPhase('fetching-playlists');
@@ -200,10 +201,15 @@ export default function Jukebox({
       />
       {phase === 'ready' && (
         <div id="ui-overlay">
-          {npIdle && <div>
-            <div className="instruction-badge">TAP TO PLAY/PAUSE</div>
-            <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM</div>
-            </div>}
+          {npIdle && (
+            <div>
+              <div className="instruction-badge">TAP TO PLAY/PAUSE</div>
+              <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM • C FOR CATS</div>
+              <div className="instruction-subtitle">
+                ← → ROTATION SPEED &nbsp;•&nbsp; ↑ ↓ ROW COUNT
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -346,18 +352,21 @@ function initThree(
   tracks: any[],
   nowItem: any,
   setBanner: (text: string, idle?: boolean) => void,
-  mode: { lighting: number; zoom: number; demoSpin: number; debug: boolean; goToActiveCard?: () => void },
+  mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; goToActiveCard?: () => void },
   rows: number,
 ) {
   let audioInitialized = false;
-  let clunkSynth: any, beepSynth: any, humSynth: any, humFilter: any;
+  let beepSynth: any, humSynth: any, humFilter: any;
   async function initAudio() {
     if (audioInitialized) return;
     await Tone.start();
-    clunkSynth = new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 2, oscillator: { type: 'square' }, envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 } }).toDestination();
-    clunkSynth.volume.value = -5;
-    beepSynth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: 'triangle' }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.2, release: 1 } }).toDestination();
-    beepSynth.volume.value = -12;
+    // Soft triangle-wave chord for the card-select chime. Slight attack ramp
+    // avoids the square-wave transient pop the old MembraneSynth produced.
+    beepSynth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'triangle' },
+      envelope: { attack: 0.02, decay: 0.2, sustain: 0.2, release: 1 },
+    }).toDestination();
+    beepSynth.volume.value = -10;
     humSynth = new Tone.Noise('pink');
     humFilter = new Tone.Filter(150, 'lowpass').toDestination();
     humSynth.connect(humFilter);
@@ -365,26 +374,19 @@ function initThree(
     audioInitialized = true;
   }
   function disposeAudio() {
-    audioTimers.forEach(clearTimeout);
-    audioTimers.length = 0;
     if (!audioInitialized) return;
     try { humSynth.stop(); } catch {}
     try { humSynth.dispose(); } catch {}
     try { humFilter.dispose(); } catch {}
-    try { clunkSynth.dispose(); } catch {}
     try { beepSynth.dispose(); } catch {}
     audioInitialized = false;
   }
-  // setTimeouts for the delayed beep; tracked so cleanup can cancel them
-  // (Tone won't crash on disposed synths but we don't want zombie callbacks).
-  const audioTimers: ReturnType<typeof setTimeout>[] = [];
   async function playSelectionSound() {
     // Ensure the AudioContext is live (browsers require a user gesture). On
     // the very first tap initAudio still resolves before we trigger the synth.
     await initAudio();
     if (!audioInitialized) return;
-    clunkSynth.triggerAttackRelease('G1', '16n');
-    audioTimers.push(setTimeout(() => beepSynth.triggerAttackRelease(['C4', 'E4', 'G4'], '8n'), 150));
+    beepSynth.triggerAttackRelease(['C4', 'E4', 'G4'], '8n');
     if (humSynth.state !== 'started') humSynth.start();
   }
 
@@ -808,6 +810,12 @@ function initThree(
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
   const categories = ['extended play', 'varieties', 'your picks', 'favorites', 'soul', 'popular', 'hit tunes', 'jazz', 'country', 'rock & roll'];
 
+  // All category labels live under this group so the 'C' key toggle can flip
+  // them with a single .visible assignment.
+  const categoryGroup = new THREE.Group();
+  categoryGroup.visible = mode.showCategories;
+  jukeboxGroup.add(categoryGroup);
+
   // Track empty slots (for the queue) and slots already taken by queued cards
   const emptySlots: { c: number; r: number }[] = [];
   const queueCards: any[] = [];
@@ -861,7 +869,7 @@ function initThree(
     catMesh.receiveShadow = true;
     catMesh.position.set(Math.sin(theta) * (R + 0.1), -startY - ROW_SPACING, Math.cos(theta) * (R + 0.1));
     catMesh.rotation.y = theta;
-    jukeboxGroup.add(catMesh);
+    categoryGroup.add(catMesh);
 
     for (let r = 0; r < ROWS; r++) {
       const idx = c * ROWS + r;
@@ -1064,11 +1072,9 @@ function initThree(
   window.addEventListener('resize', onResize);
 
   // Poll now-playing. syncNowPlaying handles deck lookup, queue placement,
-  // LED positioning, and the jump-to-card camera move.
-  // Skipped in demo mode — the demo route is a passive orbit and shouldn't
-  // burn Spotify API quota (or 401 for anonymous viewers).
-  // No poll in demo (passive orbit) or debug (fake URIs) modes.
-  const pollInterval: ReturnType<typeof setInterval> | null = (mode.demoSpin || mode.debug)
+  // LED positioning, and the jump-to-card camera move. Skipped in debug mode
+  // (the URIs are fake, the Spotify API would 4xx).
+  const pollInterval: ReturnType<typeof setInterval> | null = mode.debug
     ? null
     : setInterval(async () => {
         try {
@@ -1159,19 +1165,20 @@ function initThree(
       }
     }
 
-    // Demo mode: orbit the CAMERA around the jukebox each frame at a constant
-    // angular speed (radians/sec * delta), so direction-tracking lights also
-    // rotate. Using time-based delta keeps the speed identical on 60 Hz and
-    // 120 Hz (ProMotion) displays.
-    if (mode.demoSpin) {
+    // Auto-orbit (driven by ←/→ arrow keys, default 0 = off). Rotating the
+    // camera around the jukebox — instead of spinning the jukeboxGroup — lets
+    // the direction-tracking lights (dirLight, fillFrontAmber) follow along.
+    // Time-based delta keeps the speed identical on 60 Hz and 120 Hz displays.
+    if (mode.spin) {
       const dt = clock.getDelta();
-      const az = controls.getAzimuthalAngle() + mode.demoSpin * dt;
+      const az = controls.getAzimuthalAngle() + mode.spin * dt;
       const r = Math.hypot(camera.position.x, camera.position.z);
       camera.position.x = Math.sin(az) * r;
       camera.position.z = Math.cos(az) * r;
     }
 
     controls.update();
+    if (categoryGroup.visible !== mode.showCategories) categoryGroup.visible = mode.showCategories;
 
     const dist = camera.position.length();
     scene.fog.near = dist + 30; scene.fog.far = dist + 250;

@@ -24,8 +24,10 @@ Playback requires an active Spotify device — open Spotify somewhere on your ac
 
 - `/` — landing page. Auto-redirects to `/box` if you're already signed in.
 - `/box` — the jukebox app. Loads tokens from `localStorage`; if missing, shows just the login button (no full landing graphics).
-- `/demo` — the jukebox app but it constantly spins
+- `/dev` — login-less visual playground with procedural fake tracks. Works in production too.
 - `/callback` — OAuth redirect target.
+
+Arrow keys nudge the auto-rotation (←/→) and row count (↑/↓); `C` toggles category labels. Default is no auto-spin.
 
 Routes are case-insensitive via middleware (`/BOX`, `/Box`, etc. all 308 → `/box`).
 

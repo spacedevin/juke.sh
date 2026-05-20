@@ -109,16 +109,60 @@ You'll see the 3D jukebox build itself with cards for every track. If something 
 
 ## Controls (once you're in)
 
-- **Tap a card** — play that track on your active Spotify device
-- **Drag left/right** — spin the jukebox
-- **Drag up/down** — shift the lighting between **Roller Rink** (up, moody neon) and **Classic Diner** (down, warm bulbs)
-- **Scroll wheel / pinch** — zoom in and out
-- **Double-tap empty chrome** — snap zoom between fit-to-screen and tight-on-cards
+### Pointer / touch
+
+| Input | What it does |
+| --- | --- |
+| **Tap a card** | Play that track on your active Spotify device. Tap the playing card again to deselect. |
+| **Drag left / right** | Spin the jukebox. The rotation speed auto-scales with the size of the deck so a 1000-track jukebox doesn't whip past you. |
+| **Drag up / down** | Continuously blend between **Roller Rink** (drag up — moody neon, color cycles with the playing track) and **Classic Diner** (drag down — warm amber bulbs). |
+| **Double-tap empty space / chrome** | Snap zoom between full fit-to-screen and tight-on-cards. |
+| **`C` key** | Toggle the category labels (EXTENDED PLAY, VARIETIES, …) on / off. On by default. |
+
+### Zoom
+
+| Input | What it does |
+| --- | --- |
+| **Mouse scroll wheel** | Continuously zoom in / out between fit-to-screen and tight-on-cards. |
+| **Trackpad pinch** | Same as scroll wheel (ctrl + wheel events). |
+| **Two-finger pinch (touch)** | Zoom — spread out to zoom in, pinch together to zoom out. |
+| **Double-tap empty space** | Snap to the opposite zoom extreme. |
+
+### Now-playing helpers
+
+While a track is playing, juke.sh:
+- **Illuminates the playing card** with edge LEDs that cross-fade between cards when the track changes.
+- **Sweeps four amber LED markers** along the top chrome rim from opposite sides toward the playing card — so no matter which way you've spun the drum, just follow the lights.
+- **Auto-jumps** the drum to center the new track when Spotify reports a track change (polled every 8 s).
+- **Reuses empty slots** to add tracks that weren't in your selected playlists (e.g. you start playing a one-off song outside the loaded deck — it gets dropped into the next blank card on the drum).
 
 > ⚠️ Playback requires an active Spotify device. Open Spotify on your phone, desktop, web player, or any other device first so juke.sh has somewhere to send the "play" command. If nothing plays when you tap a card, this is almost always why.
 
 ![Loaded jukebox](docs/screenshots/hero.png)
 
+---
+
+## Routes
+
+| URL | What it shows |
+| --- | --- |
+| `/` | Landing page with the Client ID form + login button. Auto-redirects to `/box` if you're already signed in. |
+| `/box` | The actual jukebox. Bookmarkable. If you visit it signed out you're bounced back to `/`. |
+| `/dev` | Skips Spotify entirely and loads procedural fake tracks. No-login visual playground that anyone can hit — useful for screenshots, recordings, or sharing the look without giving someone your Spotify. All the same keyboard shortcuts work as on `/box`. |
+
+Route paths are case-insensitive (`/BOX`, `/Demo`, etc. all 308-redirect to lowercase).
+
+### Keyboard shortcuts
+
+All shortcuts work on every route (`/box` and `/dev`). Suppressed while you're focused in a form field.
+
+| Key | What it does |
+| --- | --- |
+| **C** | Toggle the category labels under each column (EXTENDED PLAY, VARIETIES, YOUR PICKS, …). On by default. |
+| **← Left arrow** | Nudge the auto-orbit speed leftward (+0.05 rad/sec, clamped ±1.5). Default is 0 — the jukebox doesn't spin on its own unless you press an arrow. |
+| **→ Right arrow** | Nudge the auto-orbit speed rightward (−0.05 rad/sec). Press repeatedly to accelerate, or use the opposite key to slow / reverse. |
+| **↑ Up arrow** | Add one row to the jukebox (more cards per column). Range 4–20. Triggers a quick scene rebuild. |
+| **↓ Down arrow** | Remove one row from the jukebox. |
 
 ---
 
