@@ -1146,10 +1146,10 @@ function initThree(
       onSceneReady();
     }
 
-    // Polar angle clamp transition (lock to horizontal scroll when zoomed in)
-    // Lock vertical pan: horizontal-only rotation in both zoom modes
-    const targetMinPolar = Math.PI / 2;
-    const targetMaxPolar = Math.PI / 2;
+    // Polar angle vs zoom: zoomed out → slight top-down tilt (spin7 fit mode);
+    // zoomed in → lock to horizontal scroll only.
+    const targetMinPolar = Math.PI / 2 + (Math.PI / 6 - Math.PI / 2) * (1 - mode.zoom);
+    const targetMaxPolar = Math.PI / 2 + 0.1 * (1 - mode.zoom);
     controls.minPolarAngle += (targetMinPolar - controls.minPolarAngle) * 0.1;
     controls.maxPolarAngle += (targetMaxPolar - controls.maxPolarAngle) * 0.1;
     if (controls.minPolarAngle > controls.maxPolarAngle) controls.minPolarAngle = controls.maxPolarAngle;
