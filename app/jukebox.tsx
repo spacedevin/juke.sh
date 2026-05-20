@@ -1021,26 +1021,49 @@ function initThree(
   localLed2.add(new THREE.Mesh(ledGeo, ledMat));
   jukeboxGroup.add(localLed2);
 
-  // Convergence-tracker LEDs that orbit the top rim. They start from the
-  // diametrically-opposite side of the active card and travel in opposite
-  // directions to meet at the card — visible from any angle so you can always
-  // follow them home to the playing track. Multiple pairs are staggered in
-  // time so a tracker is always somewhere on the rim.
+  // Convergence-tracker LEDs that orbit just under the top rim. They start
+  // from the diametrically-opposite side of the active card and travel in
+  // opposite directions to meet at the card — guiding the eye home no matter
+  // which way you've spun the drum.
+  //
+  // Each tracker is TWO things:
+  //  1. The visible LED bead (HDR-bright MeshBasic sphere) — the "lit emitter"
+  //     you actually see, made into a bloomed dot by UnrealBloomPass.
+  //  2. A PointLight at the same position — adds a soft radial wash on
+  //     whatever card is directly below. PointLight (not SpotLight) because
+  //     a SpotLight's cone, however feathered, intersects flat card surfaces
+  //     as a recognizable cone outline — that's what reads as "theater spot",
+  //     not LED. PointLights produce smooth distance-based falloff with no
+  //     visible beam geometry, exactly like a real LED downlight.
+  //
+  // The top rim torus is at y = HEIGHT_TOTAL/2 with tube radius 0.6, so its
+  // underside sits at y = HEIGHT_TOTAL/2 - 0.6. We park them just below that.
   const TRACKER_R = R + 0.2;
-  const TRACKER_Y = HEIGHT_TOTAL / 2 + 0.35;
-  const TRACKER_PAIRS = 2; // → 4 LEDs total (2 CW + 2 CCW)
-  const trackerGeo = new THREE.SphereGeometry(0.18, 16, 16);
-  const trackerMat = new THREE.MeshBasicMaterial({ color: 0xffd580 });
-  const trackers: { mesh: any; light: any; dir: 1 | -1; offset: number }[] = [];
+  const TRACKER_Y = HEIGHT_TOTAL / 2 - 0.7;
+  const TRACKER_PAIRS = 2; // → 4 lights total (2 CW + 2 CCW)
+  // Shared bead geo + material across all 4 LEDs. The bead IS the LED — a tiny
+  // glowing dot you can see under the rim. We push the color above 1.0 (HDR)
+  // so ACES tone-mapping blows out the center to near-white while keeping the
+  // warm tint at the edges, and UnrealBloomPass adds the halo on top.
+  const ledBeadGeo = new THREE.SphereGeometry(0.07, 12, 8);
+  const ledBeadMat = new THREE.MeshBasicMaterial();
+  ledBeadMat.color.setRGB(3.0, 2.4, 1.4); // amber-white at ~3× sRGB clipped
+  const trackers: { light: THREE.PointLight; bead: THREE.Mesh; dir: 1 | -1; offset: number }[] = [];
   for (let i = 0; i < TRACKER_PAIRS; i++) {
     const offset = i / TRACKER_PAIRS; // stagger across the cycle
     for (const dir of [1, -1] as const) {
-      const mesh = new THREE.Mesh(trackerGeo, trackerMat);
-      const light = new THREE.PointLight(0xffd580, 0, 10);
-      mesh.add(light);
-      mesh.visible = false;
-      jukeboxGroup.add(mesh);
-      trackers.push({ mesh, light, dir, offset });
+      // PointLight(color, intensity, distance, decay)
+      //  • distance 4   — short throw; only the cards directly below are lit
+      //  • decay 2      — natural inverse-square falloff (smooth gradient, no
+      //                   visible cone shape — that's the LED-vs-spot tell)
+      const light = new THREE.PointLight(0xffd580, 0, 4, 2);
+      light.visible = false;
+      jukeboxGroup.add(light);
+      // Visible LED bead — the dot you actually see as the "LED" itself.
+      const bead = new THREE.Mesh(ledBeadGeo, ledBeadMat);
+      bead.visible = false;
+      jukeboxGroup.add(bead);
+      trackers.push({ light, bead, dir, offset });
     }
   }
 
@@ -1874,25 +1897,34 @@ function initThree(
       localLed1.color.lerp(_ledTgt, 0.1);
       localLed2.color.lerp(_ledTgt, 0.1);
 
-      // Multiple staggered tracker pairs sweep both directions on the rim.
+      // Multiple staggered tracker pairs sweep both directions under the rim.
       const TRACKER_SPEED = 0.4; // cycles per second
       const thetaActive = activeCard.userData.theta;
       for (const tr of trackers) {
-        tr.mesh.visible = true;
+        tr.light.visible = true;
+        tr.bead.visible = true;
         const progress = (t * TRACKER_SPEED + tr.offset) % 1;
         const ang = thetaActive + tr.dir * Math.PI * (1 - progress);
-        tr.mesh.position.set(Math.sin(ang) * TRACKER_R, TRACKER_Y, Math.cos(ang) * TRACKER_R);
-        tr.light.intensity = 3 + Math.sin(progress * Math.PI) * 4;
+        const x = Math.sin(ang) * TRACKER_R;
+        const z = Math.cos(ang) * TRACKER_R;
+        tr.light.position.set(x, TRACKER_Y, z);
+        tr.bead.position.set(x, TRACKER_Y, z);
+        // PointLight with decay=2 + short distance falls off quickly, so we
+        // need a meaningful intensity to actually show up on the card. Base
+        // 8 cd with a +16 burst at the convergence moment.
+        tr.light.intensity = 8 + Math.sin(progress * Math.PI) * 16;
         tr.light.color.lerp(_ledTgt, 0.1);
       }
-      trackerMat.color.lerp(_ledTgt, 0.1);
     } else {
       localLed1.intensity += -localLed1.intensity * 0.1;
       localLed2.intensity += -localLed2.intensity * 0.1;
       if (localLed1.intensity < 0.05) ledCard = null;
       for (const tr of trackers) {
-        tr.mesh.visible = false;
+        // visible=false skips the light entirely in WebGLLights — no per-frag
+        // cost while the deck has no active card.
+        tr.light.visible = false;
         tr.light.intensity = 0;
+        tr.bead.visible = false;
       }
     }
     // The previous back-of-drum cull (one JS loop hiding ~40% of cards each
@@ -1949,6 +1981,10 @@ function initThree(
     });
     if ((scene as any).environment?.dispose) (scene as any).environment.dispose();
     if ((scene as any).background?.dispose) (scene as any).background.dispose();
+    // EffectComposer owns its render targets + bloom pass owns several
+    // intermediate FBOs. Without this the route-change leaks ~tens of MB of
+    // VRAM per remount.
+    composer.dispose();
     renderer.dispose();
     container.removeChild(renderer.domElement);
   };
