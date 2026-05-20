@@ -1039,16 +1039,46 @@ function initThree(
   // The top rim torus is at y = HEIGHT_TOTAL/2 with tube radius 0.6, so its
   // underside sits at y = HEIGHT_TOTAL/2 - 0.6. We park them just below that.
   const TRACKER_R = R + 0.2;
-  const TRACKER_Y = HEIGHT_TOTAL / 2 - 0.7;
+  // Top rim's underside (lowest point of the torus tube) sits at
+  // HEIGHT_TOTAL/2 - 0.6. With a bead radius of 0.07, parking the bead center
+  // 0.67 below the rim center puts the TOP of the bead flush against the
+  // rim — looks like the LED is mounted to the underside of the chrome.
+  const TRACKER_Y = HEIGHT_TOTAL / 2 - 0.67;
   const TRACKER_PAIRS = 2; // → 4 lights total (2 CW + 2 CCW)
-  // Shared bead geo + material across all 4 LEDs. The bead IS the LED — a tiny
-  // glowing dot you can see under the rim. We push the color above 1.0 (HDR)
-  // so ACES tone-mapping blows out the center to near-white while keeping the
-  // warm tint at the edges, and UnrealBloomPass adds the halo on top.
+  // The bead is the LED itself — a tiny bright sphere. The halo is a
+  // camera-facing sprite with a radial-gradient texture, additively blended
+  // over whatever's behind. Together: a bright dot with a soft glow ring.
+  // Same look as a bloom pass on the LED specifically, but at ~1% of the cost
+  // (one quad per LED, no fullscreen blur). Works on every mobile GPU.
   const ledBeadGeo = new THREE.SphereGeometry(0.07, 12, 8);
-  const ledBeadMat = new THREE.MeshBasicMaterial();
-  ledBeadMat.color.setRGB(3.0, 2.4, 1.4); // amber-white at ~3× sRGB clipped
-  const trackers: { light: THREE.PointLight; bead: THREE.Mesh; dir: 1 | -1; offset: number }[] = [];
+  const ledBeadMat = new THREE.MeshBasicMaterial({ color: 0xffeebb });
+  // Procedural soft-radial-gradient texture for the halo. Shared by all 4
+  // sprites so it lives in VRAM exactly once.
+  const haloCanvas = document.createElement('canvas');
+  haloCanvas.width = 128; haloCanvas.height = 128;
+  const hctx = haloCanvas.getContext('2d')!;
+  const haloGrad = hctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  haloGrad.addColorStop(0.0, 'rgba(255, 220, 150, 1.00)');
+  haloGrad.addColorStop(0.25, 'rgba(255, 200, 120, 0.55)');
+  haloGrad.addColorStop(0.55, 'rgba(255, 180, 100, 0.15)');
+  haloGrad.addColorStop(1.0, 'rgba(255, 160, 80,  0.00)');
+  hctx.fillStyle = haloGrad;
+  hctx.fillRect(0, 0, 128, 128);
+  const haloTex = new THREE.CanvasTexture(haloCanvas);
+  haloTex.needsUpdate = true;
+  const haloMat = new THREE.SpriteMaterial({
+    map: haloTex,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+  });
+  const trackers: {
+    light: THREE.PointLight;
+    bead: THREE.Mesh;
+    halo: THREE.Sprite;
+    dir: 1 | -1;
+    offset: number;
+  }[] = [];
   for (let i = 0; i < TRACKER_PAIRS; i++) {
     const offset = i / TRACKER_PAIRS; // stagger across the cycle
     for (const dir of [1, -1] as const) {
@@ -1063,7 +1093,13 @@ function initThree(
       const bead = new THREE.Mesh(ledBeadGeo, ledBeadMat);
       bead.visible = false;
       jukeboxGroup.add(bead);
-      trackers.push({ light, bead, dir, offset });
+      // Halo sprite — billboarded glow disc behind the bead. Size in world
+      // units; ~0.7 looks roughly like the bloom radius we had before.
+      const halo = new THREE.Sprite(haloMat);
+      halo.scale.set(0.7, 0.7, 1);
+      halo.visible = false;
+      jukeboxGroup.add(halo);
+      trackers.push({ light, bead, halo, dir, offset });
     }
   }
 
@@ -1903,17 +1939,23 @@ function initThree(
       for (const tr of trackers) {
         tr.light.visible = true;
         tr.bead.visible = true;
+        tr.halo.visible = true;
         const progress = (t * TRACKER_SPEED + tr.offset) % 1;
         const ang = thetaActive + tr.dir * Math.PI * (1 - progress);
         const x = Math.sin(ang) * TRACKER_R;
         const z = Math.cos(ang) * TRACKER_R;
         tr.light.position.set(x, TRACKER_Y, z);
         tr.bead.position.set(x, TRACKER_Y, z);
+        tr.halo.position.set(x, TRACKER_Y, z);
         // PointLight with decay=2 + short distance falls off quickly, so we
         // need a meaningful intensity to actually show up on the card. Base
         // 8 cd with a +16 burst at the convergence moment.
         tr.light.intensity = 8 + Math.sin(progress * Math.PI) * 16;
         tr.light.color.lerp(_ledTgt, 0.1);
+        // Halo pulses with the same convergence rhythm — softer at the
+        // start/end of each cycle, brighter as the two trackers meet.
+        const haloPulse = 0.6 + Math.sin(progress * Math.PI) * 0.6;
+        tr.halo.material.opacity = haloPulse;
       }
     } else {
       localLed1.intensity += -localLed1.intensity * 0.1;
@@ -1925,6 +1967,7 @@ function initThree(
         tr.light.visible = false;
         tr.light.intensity = 0;
         tr.bead.visible = false;
+        tr.halo.visible = false;
       }
     }
     // The previous back-of-drum cull (one JS loop hiding ~40% of cards each
@@ -1981,10 +2024,6 @@ function initThree(
     });
     if ((scene as any).environment?.dispose) (scene as any).environment.dispose();
     if ((scene as any).background?.dispose) (scene as any).background.dispose();
-    // EffectComposer owns its render targets + bloom pass owns several
-    // intermediate FBOs. Without this the route-change leaks ~tens of MB of
-    // VRAM per remount.
-    composer.dispose();
     renderer.dispose();
     container.removeChild(renderer.domElement);
   };
