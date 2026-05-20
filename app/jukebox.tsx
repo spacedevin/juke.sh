@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as Tone from 'tone';
 import {
-  isLoggedIn, loadAllTracks, play, nowPlaying,
+  isLoggedIn, login, getStoredClientId, loadAllTracks, play, nowPlaying,
   getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
   getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
   type UserPlaylist,
@@ -243,7 +243,18 @@ export default function Jukebox({
       return;
     }
 
-    if (!isLoggedIn()) { router.replace('/'); return; }
+    // /box is the "I want to use the jukebox" destination. If we're not
+    // logged in, kick off the Spotify auth flow automatically — but only if
+    // a Client ID is already stored (otherwise we have nothing to send to
+    // Spotify; bounce to the landing page so the user can paste one in).
+    if (!isLoggedIn()) {
+      if (getStoredClientId()) {
+        void login();
+      } else {
+        router.replace('/');
+      }
+      return;
+    }
     setPickedIds(new Set(getSelectedPlaylists()));
     setCachedIds(new Set(getCachedPlaylistIds()));
     void fetchPlaylistsAndPick();

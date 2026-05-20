@@ -1,15 +1,22 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { isLoggedIn, login, getStoredClientId, setStoredClientId } from '@/lib/spotify-client';
 
 export default function Landing() {
-  const router = useRouter();
   const [clientId, setClientId] = useState('');
+  // Lets us render different UI for logged-in vs logged-out without
+  // auto-redirecting. The landing page is now a hub — pick your destination
+  // (enter the jukebox, log out, demo mode) instead of getting bounced.
+  const [loggedIn, setLoggedIn] = useState(false);
   useEffect(() => {
-    if (isLoggedIn()) router.replace('/box');
+    // On localhost, render the logged-in state regardless of actual auth so
+    // we can preview the logout button + post-login layout without going
+    // through the full Spotify OAuth round-trip every time we tweak CSS.
+    const onLocalhost =
+      window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    setLoggedIn(isLoggedIn() || onLocalhost);
     setClientId(getStoredClientId());
-  }, [router]);
+  }, []);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,6 +29,17 @@ export default function Landing() {
       <div className="landing-title">juke.sh/BOX</div>
       <div className="landing-tag">Spotify WebGL Jukebox</div>
       <br />
+      {loggedIn ? (
+        <div className="auth-form">
+          <a className="sp-btn" href="/box">ENTER THE JUKEBOX</a>
+          <a className="sp-btn sp-btn-secondary" href="/logout">LOG OUT</a>
+          <div className="auth-hint">
+            You're signed in to Spotify.
+            <br /><br /><br /><br /><br />
+            <a href="/dev">Or take it for a test spin →</a>
+          </div>
+        </div>
+      ) : (
       <form className="auth-form" onSubmit={onSubmit}>
         <input
           className="client-id-input"
@@ -33,7 +51,7 @@ export default function Landing() {
           onChange={(e) => setClientId(e.target.value)}
         />
         <button className="sp-btn" type="submit">LOGIN WITH SPOTIFY</button>
-        
+
         <div className="auth-hint">
           Create a Spotify app to get a Client ID<br />(free, takes ~1 minute).
           {' '}
@@ -48,6 +66,7 @@ export default function Landing() {
 
 
       </form>
+      )}
 
       <style jsx>{`
         .auth-form { display: flex; flex-direction: column; align-items: stretch; gap: 10px; width: min(360px, 86vw); }

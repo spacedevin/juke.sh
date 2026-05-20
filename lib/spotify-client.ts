@@ -84,10 +84,14 @@ export function consumeState(): string | null {
   return s;
 }
 
-function logout() {
+// Clears the Spotify session (tokens) and any session-scoped data. Keeps the
+// stored Client ID + selected playlists so the user doesn't have to redo
+// onboarding when they log back in.
+export function logout() {
   localStorage.removeItem(LS_ACCESS);
   localStorage.removeItem(LS_REFRESH);
   localStorage.removeItem(LS_EXPIRES);
+  clearTracksCache();
 }
 
 export async function exchangeCode(code: string) {

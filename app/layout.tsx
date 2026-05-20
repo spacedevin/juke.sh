@@ -74,6 +74,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           .sp-btn:disabled { opacity: 0.35; cursor: default; }
           .sp-btn.sp-btn-icon { width: 36px; height: 36px; padding: 0; font-size: 18px; display: inline-flex; align-items: center; justify-content: center; }
           .sp-btn.picked { background: #00ff88; color: #0a0a0a; }
+          /* Muted variant — used for destructive / secondary actions
+             (e.g. LOG OUT) so they don't compete with the primary CTA. */
+          .sp-btn.sp-btn-secondary { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.25); }
+          .sp-btn.sp-btn-secondary:hover { color: #fff; border-color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.05); }
           .spinner {
             width: 38px; height: 38px;
             border: 3px solid rgba(0,255,136,0.18);
