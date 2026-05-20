@@ -411,7 +411,10 @@ export default function Jukebox({
       if (!data) {
         const fresh = await loadAllTracks(ids);
         if (!mountedRef.current) return;
-        setCachedTracks(ids, fresh.tracks, fresh.nowItem);
+        // Only cache when we actually got something. Caching an empty result
+        // (e.g. user picked a Spotify-locked algorithmic playlist) would lock
+        // them into the "no tracks" error every retry.
+        if (fresh.tracks.length > 0) setCachedTracks(ids, fresh.tracks, fresh.nowItem);
         data = fresh;
       }
       if (!data.tracks.length) {
@@ -497,7 +500,20 @@ export default function Jukebox({
       {phase === 'error' && (
         <div className="center-screen">
           <div className="loading-text" style={{ color: '#ff6680' }}>{errorMsg}</div>
-          <button className="sp-btn" onClick={() => { setErrorMsg(''); setPhase('init'); }}>RETRY</button>
+          <button
+            className="sp-btn"
+            type="button"
+            onClick={() => {
+              setErrorMsg('');
+              // Send the user back through the playlist picker so they can
+              // choose different playlists. Important for the "no tracks"
+              // case — usually means they picked a Spotify-locked algorithmic
+              // playlist and need to swap it for an editable one.
+              void fetchPlaylistsAndPick();
+            }}
+          >
+            RETRY
+          </button>
         </div>
       )}
 
