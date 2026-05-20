@@ -1082,40 +1082,93 @@ function initThree(
     const y = startY - r * ROW_SPACING;
     card.position.set(x, y, z);
     card.rotation.y = theta;
-    card.userData = { isCard: true, song, baseY: y, theta, c, r, accentColor: accent, bgColor: bg, altColor: alt };
+    card.userData = {
+      isCard: true, song, baseY: y, theta, c, r,
+      // Hex strings (still used by external consumers).
+      accentColor: accent, bgColor: bg, altColor: alt,
+      // Pre-parsed Color objects — the rink-mode lighting block reads these
+      // every frame while the card is active. `set('#abcdef')` parses the
+      // string on every call; `copy()` is a 3-float copy.
+      accentCol: new THREE.Color(accent),
+      bgCol: new THREE.Color(bg),
+      altCol: new THREE.Color(alt || '#ffffff'),
+    };
     return card;
   }
 
-  for (let c = 0; c < COLS; c++) {
-    const theta = -Math.PI + c * COL_ANGLE + COL_ANGLE / 2;
-
+  // Bottom-rim category labels as a single InstancedMesh + texture atlas.
+  // Before: COLS canvases / textures / materials / draw calls — one per column,
+  //         all rendering the same 10 unique strings.
+  // After:  1 canvas (CAT_N rows stacked vertically), 1 texture, 1 material,
+  //         1 draw call. Each instance picks its row via a per-instance UV-y
+  //         offset. Pixels are identical — the canvas is drawn with the same
+  //         font, size, and fill as before; only the packing changes.
+  {
+    const CAT_W = 256, CAT_H = 64, CAT_N = categories.length;
     const catCanvas = document.createElement('canvas');
-    catCanvas.width = 256; catCanvas.height = 64;
+    catCanvas.width = CAT_W; catCanvas.height = CAT_H * CAT_N;
     const cctx = catCanvas.getContext('2d')!;
-    cctx.fillStyle = '#006666'; cctx.fillRect(0, 0, 256, 64);
+    cctx.fillStyle = '#006666'; cctx.fillRect(0, 0, CAT_W, CAT_H * CAT_N);
     cctx.fillStyle = '#ffffff'; cctx.font = "bold 28px 'Oswald'";
     cctx.textAlign = 'center'; cctx.textBaseline = 'middle';
-    cctx.fillText(categories[c % categories.length].toUpperCase(), 128, 32);
-    // Reactive to scene lighting (Standard material) AND self-illuminated via
-    // emissiveMap so each label has its own dim warm glow without spawning a
-    // real PointLight per column (that exceeds WebGL's light cap).
+    for (let i = 0; i < CAT_N; i++) {
+      cctx.fillText(categories[i].toUpperCase(), CAT_W / 2, i * CAT_H + CAT_H / 2);
+    }
     const catTex = new THREE.CanvasTexture(catCanvas);
-    const catMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(CARD_W * 0.9, 0.6),
-      new THREE.MeshStandardMaterial({
-        map: catTex,
-        emissiveMap: catTex,
-        emissive: new THREE.Color(0xffd580),
-        emissiveIntensity: 0.35,
-        roughness: 0.7,
-        metalness: 0.1,
-      })
-    );
-    catMesh.receiveShadow = true;
-    catMesh.position.set(Math.sin(theta) * (R + 0.1), -startY - ROW_SPACING, Math.cos(theta) * (R + 0.1));
-    catMesh.rotation.y = theta;
-    categoryGroup.add(catMesh);
+    catTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    catTex.needsUpdate = true;
 
+    // Per-instance UV-y offset. WebGL UV-y origin is bottom-left while the
+    // canvas was drawn top-down, so instance c (showing row c % CAT_N) wants
+    // its band starting at UV-y = 1 - (rowIdx + 1) / CAT_N.
+    const catGeo = new THREE.PlaneGeometry(CARD_W * 0.9, 0.6);
+    const aUvOffset = new Float32Array(COLS);
+    for (let c = 0; c < COLS; c++) {
+      aUvOffset[c] = 1 - ((c % CAT_N) + 1) / CAT_N;
+    }
+    catGeo.setAttribute('aUvOffset', new THREE.InstancedBufferAttribute(aUvOffset, 1));
+
+    // Reactive to scene lighting (Standard material) AND self-illuminated via
+    // emissiveMap so each label has its own dim warm glow.
+    const CAT_SCALE_Y = (1 / CAT_N).toFixed(6);
+    const catMat = new THREE.MeshStandardMaterial({
+      map: catTex,
+      emissiveMap: catTex,
+      emissive: new THREE.Color(0xffd580),
+      emissiveIntensity: 0.35,
+      roughness: 0.7,
+      metalness: 0.1,
+    });
+    catMat.onBeforeCompile = (shader) => {
+      shader.vertexShader = 'attribute float aUvOffset;\n' + shader.vertexShader.replace(
+        '#include <uv_vertex>',
+        `#include <uv_vertex>
+        #ifdef USE_MAP
+          vMapUv.y = vMapUv.y * ${CAT_SCALE_Y} + aUvOffset;
+        #endif
+        #ifdef USE_EMISSIVEMAP
+          vEmissiveMapUv.y = vEmissiveMapUv.y * ${CAT_SCALE_Y} + aUvOffset;
+        #endif
+        `
+      );
+    };
+
+    const catInstanced = new THREE.InstancedMesh(catGeo, catMat, COLS);
+    catInstanced.receiveShadow = true;
+    catInstanced.castShadow = false;
+    const catDummy = new THREE.Object3D();
+    for (let c = 0; c < COLS; c++) {
+      const theta = -Math.PI + c * COL_ANGLE + COL_ANGLE / 2;
+      catDummy.position.set(Math.sin(theta) * (R + 0.1), -startY - ROW_SPACING, Math.cos(theta) * (R + 0.1));
+      catDummy.rotation.set(0, theta, 0);
+      catDummy.updateMatrix();
+      catInstanced.setMatrixAt(c, catDummy.matrix);
+    }
+    catInstanced.instanceMatrix.needsUpdate = true;
+    categoryGroup.add(catInstanced);
+  }
+
+  for (let c = 0; c < COLS; c++) {
     for (let r = 0; r < ROWS; r++) {
       const idx = c * ROWS + r;
       if (idx >= displayTracks.length) break;
@@ -1475,6 +1528,12 @@ function initThree(
     controls.update();
     if (categoryGroup.visible !== mode.showCategories) categoryGroup.visible = mode.showCategories;
 
+    // Single read of az now that controls.update() has finished syncing —
+    // reused by the zoom block + the dirLight orbit below. getAzimuthalAngle
+    // internally walks a quat→spherical conversion, so caching it dodges that
+    // work twice per frame.
+    const az = controls.getAzimuthalAngle();
+
     const dist = camera.position.length();
     scene.fog.near = dist + 30; scene.fog.far = dist + 250;
 
@@ -1509,16 +1568,17 @@ function initThree(
       camera.fov += (targetFOV - camera.fov) * 0.12;
       camera.updateProjectionMatrix();
       const vFOV = (camera.fov * Math.PI) / 180;
-      const hDist = (HEIGHT_TOTAL + 1) / (2 * Math.tan(vFOV / 2));
-      const wDist = (R * 2 + 4) / (2 * Math.tan(vFOV / 2) * camera.aspect);
+      // Cache the tan once — hDist and wDist below both use it on the same FOV.
+      const tanHalfVFov = Math.tan(vFOV / 2);
+      const hDist = (HEIGHT_TOTAL + 1) / (2 * tanHalfVFov);
+      const wDist = (R * 2 + 4) / (2 * tanHalfVFov * camera.aspect);
       const fitDist = Math.max(hDist, wDist);
       // At max zoom, pull in past the strict height-fit so cards punch larger
       // in frame (FOV compression alone doesn't change apparent card size).
       const tightDist = hDist * mode.zoomTight;
       const targetDist = fitDist + (tightDist - fitDist) * z;
-      const azi = controls.getAzimuthalAngle();
-      const tx = Math.sin(azi) * (R + targetDist);
-      const tz = Math.cos(azi) * (R + targetDist);
+      const tx = Math.sin(az) * (R + targetDist);
+      const tz = Math.cos(az) * (R + targetDist);
       _camLerpTarget.set(tx, 0, tz);
       camera.position.lerp(_camLerpTarget, 0.12);
       controls.target.lerp(_origin, 0.12);
@@ -1555,9 +1615,11 @@ function initThree(
     // Rink endpoint — moody, optionally driven by the active card's palette
     let rHemi: number, rDir: number;
     if (activeCard) {
-      _scratchA.set(activeCard.userData.accentColor);
-      _scratchB.set(activeCard.userData.bgColor);
-      _scratchC.set(activeCard.userData.altColor || '#ffffff');
+      // Pre-parsed Color objects (set once in buildCard) — copy() is a 3-float
+      // memcpy versus set('#abcdef') which re-parses the hex on every frame.
+      _scratchA.copy(activeCard.userData.accentCol);
+      _scratchB.copy(activeCard.userData.bgCol);
+      _scratchC.copy(activeCard.userData.altCol);
       const cycle = (Math.sin(t * 1.5) + 1) / 2;
       _rColor1.lerpColors(_scratchA, _scratchB, cycle);
       _rColor2.lerpColors(_scratchB, _scratchC, 1 - cycle);
@@ -1584,7 +1646,7 @@ function initThree(
     _tColor1.lerpColors(_dColor1, _rColor1, L);
     _tColor2.lerpColors(_dColor2, _rColor2, L);
 
-    const az = controls.getAzimuthalAngle();
+    // `az` already cached at the top of the frame.
     dirLight.position.set(Math.sin(az) * 100, 100, Math.cos(az) * 100);
     // Position the amber up and ~70° off to the right of the camera, aimed at
     // origin → light travels diagonally down from upper-right to lower-left
@@ -1614,7 +1676,7 @@ function initThree(
         localLed1.intensity += (5.0 - localLed1.intensity) * 0.1;
         localLed2.intensity += (5.0 - localLed2.intensity) * 0.1;
       }
-      _scratchA.set(activeCard.userData.accentColor);
+      _scratchA.copy(activeCard.userData.accentCol);
       _ledTgt.copy(_ledBase).lerp(_scratchA, 0.15);
       ledMat.color.lerp(_ledTgt, 0.1);
       localLed1.color.lerp(_ledTgt, 0.1);
