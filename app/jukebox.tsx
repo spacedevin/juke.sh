@@ -13,7 +13,7 @@ import {
   UserPlaylist,
 } from '@/lib/spotify-client';
 import { loadPrefs, savePrefs, flushPrefs } from '@/lib/preferences';
-import { generateCardArt, xmur3 } from '@/lib/card-art';
+import { generateCardArt, preloadCardFonts, xmur3 } from '@/lib/card-art';
 
 type Phase = 'init' | 'fetching-playlists' | 'picking' | 'loading-tracks' | 'ready' | 'error';
 
@@ -202,7 +202,7 @@ export default function Jukebox({
     if (debug) {
       void (async () => {
         const m = await import('@/lib/debug-tracks');
-        try { await (document as any).fonts?.ready; } catch {}
+        try { await preloadCardFonts(); } catch {}
         if (!mountedRef.current) return;
         tracksDataRef.current = { tracks: m.generateDebugTracks(120), nowItem: null };
         setPhase('ready');
@@ -370,7 +370,7 @@ export default function Jukebox({
       setLoadingMsg('Building jukebox…');
       // Wait for Google fonts so the canvas card textures render with the
       // intended typefaces instead of falling back to system serifs.
-      try { await (document as any).fonts?.ready; } catch {}
+      try { await preloadCardFonts(); } catch {}
       if (!mountedRef.current) return;
       tracksDataRef.current = { tracks: data.tracks, nowItem: data.nowItem };
       setPhase('ready');

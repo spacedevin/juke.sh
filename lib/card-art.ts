@@ -91,6 +91,39 @@ export const codeFonts: string[] = ["'Rubik Mono One'", "'Courier Prime'", "'Osw
 export const infoFonts: string[] = ["'Courier Prime'", "'Oswald'", "'Cinzel'", "'Playfair Display'", "'Poiret One'", "'Arimo'"];
 
 /**
+ * Explicitly load every font this module renders into canvas.
+ *
+ * Why this exists: `document.fonts.ready` only waits for fonts referenced by
+ * elements actually on the page (CSS rules, rendered text). All of the faces
+ * above are used exclusively via the canvas 2D API — which DOES NOT trigger
+ * the browser to start downloading the underlying woff2 file. On mobile,
+ * Safari/Chrome preload all @font-face from a loaded stylesheet, so the cards
+ * happen to look right. On desktop, both browsers wait until something
+ * references the font in DOM/CSS, so canvas draws fall back to the default
+ * serif/sans before our preload await ever resolves.
+ *
+ * Calling `document.fonts.load("16px 'Oswald'")` for each face explicitly
+ * tells the FontFaceSet to fetch the file. Await all of them and the next
+ * `ctx.fillText(...)` will hit the real glyphs.
+ */
+export async function preloadCardFonts(): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return;
+  const families = new Set<string>();
+  for (const list of [displayFonts, scriptFonts, codeFonts, infoFonts]) {
+    for (const f of list) families.add(f);
+  }
+  // Category labels render bold 28px Oswald — request both weights so the
+  // load includes the bold woff2 (Oswald is published at 500 + 700 in our
+  // layout.tsx <link>).
+  await Promise.all(
+    [...families].flatMap((f) => [
+      document.fonts.load(`16px ${f}`).catch(() => undefined),
+      document.fonts.load(`bold 16px ${f}`).catch(() => undefined),
+    ]),
+  );
+}
+
+/**
  * Render a procedurally-laid-out jukebox card for `song`.
  *
  * 256×100 canvas. The same `song` always produces the same card (seeded by
