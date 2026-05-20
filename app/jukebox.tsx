@@ -1,86 +1,34 @@
 // @ts-nocheck
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import * as Tone from 'tone';
 import {
-  isLoggedIn, login, loadAllTracks, play, nowPlaying,
-  getStoredClientId, setStoredClientId,
+  isLoggedIn, loadAllTracks, play, nowPlaying,
   getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
   getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
   UserPlaylist,
 } from '@/lib/spotify-client';
 
-const SCRIPTS = [
-  'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js',
-  'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js',
-];
+type Phase = 'init' | 'fetching-playlists' | 'picking' | 'loading-tracks' | 'ready' | 'error';
 
-function loadScript(src: string) {
-  return new Promise<void>((resolve, reject) => {
-    if (document.querySelector(`script[src="${src}"]`)) return resolve();
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`load failed: ${src}`));
-    document.head.appendChild(s);
-  });
-}
+// How many cards stacked vertically per column. Configurable per-Jukebox via
+// the `rows` prop and live-tweakable in demo mode via the up/down arrow keys.
+const DEFAULT_ROWS = 10;
+const MIN_ROWS = 4;
+const MAX_ROWS = 20;
 
-type Phase = 'init' | 'unauthed' | 'fetching-playlists' | 'picking' | 'loading-tracks' | 'ready' | 'error';
-
-function ClientIdForm() {
-  const [clientId, setClientId] = useState('');
-  useEffect(() => { setClientId(getStoredClientId()); }, []);
-  const onSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setStoredClientId(clientId);
-    login();
-  };
-  return (
-    <form
-      onSubmit={onSubmit}
-      style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 'min(360px, 86vw)' }}
-    >
-      <input
-        type="text"
-        autoComplete="off"
-        spellCheck={false}
-        placeholder="Spotify Client ID"
-        value={clientId}
-        onChange={(e) => setClientId(e.target.value)}
-        style={{
-          background: 'rgba(20,10,15,0.85)',
-          color: '#fff',
-          border: '2px solid rgba(0,255,136,0.35)',
-          borderRadius: 8,
-          padding: '10px 14px',
-          fontFamily: 'inherit',
-          fontSize: 13,
-          letterSpacing: 1,
-          textAlign: 'center',
-          outline: 'none',
-        }}
-      />
-      <button className="sp-btn" type="submit">LOGIN WITH SPOTIFY</button>
-      <div style={{ fontSize: 11, color: '#888', letterSpacing: 0.5, paddingTop: 4 }}>
-        Create a Spotify app to get a Client ID (free, ~1 minute).
-        {' '}
-        <a
-          href="https://github.com/spacedevin/juke.sh/blob/main/USER_GUIDE.md"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: '#00ff88', textDecoration: 'none' }}
-        >
-          How →
-        </a>
-      </div>
-    </form>
-  );
-}
-
-export default function Jukebox({ demo = false }: { demo?: boolean } = {}) {
+export default function Jukebox({
+  demo = false,
+  debug = false,
+  rows: initialRows = DEFAULT_ROWS,
+}: { demo?: boolean; debug?: boolean; rows?: number } = {}) {
+  const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const [phase, setPhase] = useState<Phase>('init');
+  const [rows, setRows] = useState<number>(initialRows);
   const [loadingMsg, setLoadingMsg] = useState('Loading…');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [userPlaylists, setUserPlaylists] = useState<UserPlaylist[]>([]);
@@ -94,43 +42,95 @@ export default function Jukebox({ demo = false }: { demo?: boolean } = {}) {
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
     demoSpin: number; // radians/SECOND for demo orbit (0 = off). Time-based so
                       // the speed stays identical at 60 vs 120 fps displays.
+    debug: boolean;   // procedural tracks, no Spotify API
     goToActiveCard?: () => void;
-  }>({ lighting: 1, zoom: 0, demoSpin: demo ? 0.18 : 0 });
+  }>({ lighting: 1, zoom: 0, demoSpin: demo ? 0.18 : 0, debug });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
   const tracksDataRef = useRef<{ tracks: any[]; nowItem: any } | null>(null);
+  // Set false on unmount so in-flight async hydration doesn't write to a
+  // dead component (and doesn't try to re-fetch Spotify after we've torn down).
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   // Boot — always show the picker on refresh, but preselect whatever was used
   // last time. Cached tracks for the same id set will short-circuit the fetch.
   useEffect(() => {
-    if (!isLoggedIn()) { setPhase('unauthed'); return; }
+    // Dev-only / localhost-only short-circuit. Loads procedural debug tracks
+    // and skips auth, picker, and the Spotify API entirely. Dynamic import +
+    // the NODE_ENV check ensures the data module gets tree-shaken from
+    // production builds.
+    if (debug && process.env.NODE_ENV !== 'production') {
+      void (async () => {
+        const m = await import('@/lib/debug-tracks');
+        if (!m.isDebugAllowed()) {
+          setErrorMsg('Debug mode is only available on localhost in dev builds.');
+          setPhase('error');
+          return;
+        }
+        try { await (document as any).fonts?.ready; } catch {}
+        if (!mountedRef.current) return;
+        tracksDataRef.current = { tracks: m.generateDebugTracks(120), nowItem: null };
+        setPhase('ready');
+      })();
+      return;
+    }
+
+    if (!isLoggedIn()) { router.replace('/'); return; }
     setPickedIds(new Set(getSelectedPlaylists()));
     setCachedIds(new Set(getCachedPlaylistIds()));
     void fetchPlaylistsAndPick();
-  }, []);
+  }, [router, debug]);
 
   // Mount the Three.js scene once we hit `ready` AND the data is staged.
+  // Re-mounts whenever `rows` changes (demo arrow-key adjustment).
   useEffect(() => {
     if (phase !== 'ready') return;
     const data = tracksDataRef.current;
     if (!data || !containerRef.current) return;
     cleanupRef.current = initThree(
-      containerRef.current, data.tracks, data.nowItem, setBanner, modeRef.current,
+      containerRef.current, data.tracks, data.nowItem, setBanner, modeRef.current, rows,
     );
     return () => {
       cleanupRef.current?.();
       cleanupRef.current = undefined;
     };
-  }, [phase]);
+  }, [phase, rows]);
+
+  // Demo mode keyboard controls:
+  //  ←/→ slow down / speed up rotation (mutates modeRef in place)
+  //  ↑/↓ remove / add a row (triggers full scene rebuild via setRows)
+  useEffect(() => {
+    if (!demo) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        modeRef.current.demoSpin = Math.max(-1.5, modeRef.current.demoSpin - 0.05);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        modeRef.current.demoSpin = Math.min(1.5, modeRef.current.demoSpin + 0.05);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setRows(r => Math.min(MAX_ROWS, r + 1));
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setRows(r => Math.max(MIN_ROWS, r - 1));
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [demo]);
 
   async function fetchPlaylistsAndPick() {
     setPhase('fetching-playlists');
     setLoadingMsg('Loading your playlists…');
     try {
       const pls = await getUserPlaylists();
+      if (!mountedRef.current) return;
       setUserPlaylists(pls);
       setPhase('picking');
     } catch (e: any) {
+      if (!mountedRef.current) return;
       setErrorMsg(e?.message ?? 'Failed to load playlists');
       setPhase('error');
     }
@@ -143,20 +143,25 @@ export default function Jukebox({ demo = false }: { demo?: boolean } = {}) {
       let data = getCachedTracks(ids);
       if (!data) {
         const fresh = await loadAllTracks(ids);
+        if (!mountedRef.current) return;
         setCachedTracks(ids, fresh.tracks, fresh.nowItem);
         data = fresh;
       }
       if (!data.tracks.length) {
+        if (!mountedRef.current) return;
         setErrorMsg('No tracks found in the selected playlists.');
         setPhase('error');
         return;
       }
       setLoadingMsg('Building jukebox…');
-      for (const src of SCRIPTS) await loadScript(src);
+      // Wait for Google fonts so the canvas card textures render with the
+      // intended typefaces instead of falling back to system serifs.
       try { await (document as any).fonts?.ready; } catch {}
+      if (!mountedRef.current) return;
       tracksDataRef.current = { tracks: data.tracks, nowItem: data.nowItem };
       setPhase('ready');
     } catch (e: any) {
+      if (!mountedRef.current) return;
       setErrorMsg(e?.message ?? 'Failed to load tracks');
       setPhase('error');
     }
@@ -207,12 +212,6 @@ export default function Jukebox({ demo = false }: { demo?: boolean } = {}) {
           <div className="spinner" />
         </div>
       )}
-      {phase === 'unauthed' && (
-        <div className="center-screen">
-          <ClientIdForm />
-        </div>
-      )}
-
       {(phase === 'fetching-playlists' || phase === 'loading-tracks') && (
         <div className="center-screen">
           <div className="spinner" />
@@ -347,13 +346,11 @@ function initThree(
   tracks: any[],
   nowItem: any,
   setBanner: (text: string, idle?: boolean) => void,
-  mode: { lighting: number; zoom: number; demoSpin: number; goToActiveCard?: () => void }
+  mode: { lighting: number; zoom: number; demoSpin: number; debug: boolean; goToActiveCard?: () => void },
+  rows: number,
 ) {
-  const THREE = (window as any).THREE;
-  const Tone = (window as any).Tone;
-
   let audioInitialized = false;
-  let clunkSynth: any, beepSynth: any, humSynth: any;
+  let clunkSynth: any, beepSynth: any, humSynth: any, humFilter: any;
   async function initAudio() {
     if (audioInitialized) return;
     await Tone.start();
@@ -362,15 +359,32 @@ function initThree(
     beepSynth = new Tone.PolySynth(Tone.Synth, { oscillator: { type: 'triangle' }, envelope: { attack: 0.05, decay: 0.2, sustain: 0.2, release: 1 } }).toDestination();
     beepSynth.volume.value = -12;
     humSynth = new Tone.Noise('pink');
-    const lp = new Tone.Filter(150, 'lowpass').toDestination();
-    humSynth.connect(lp);
+    humFilter = new Tone.Filter(150, 'lowpass').toDestination();
+    humSynth.connect(humFilter);
     humSynth.volume.value = -25;
     audioInitialized = true;
   }
-  function playSelectionSound() {
+  function disposeAudio() {
+    audioTimers.forEach(clearTimeout);
+    audioTimers.length = 0;
+    if (!audioInitialized) return;
+    try { humSynth.stop(); } catch {}
+    try { humSynth.dispose(); } catch {}
+    try { humFilter.dispose(); } catch {}
+    try { clunkSynth.dispose(); } catch {}
+    try { beepSynth.dispose(); } catch {}
+    audioInitialized = false;
+  }
+  // setTimeouts for the delayed beep; tracked so cleanup can cancel them
+  // (Tone won't crash on disposed synths but we don't want zombie callbacks).
+  const audioTimers: ReturnType<typeof setTimeout>[] = [];
+  async function playSelectionSound() {
+    // Ensure the AudioContext is live (browsers require a user gesture). On
+    // the very first tap initAudio still resolves before we trigger the synth.
+    await initAudio();
     if (!audioInitialized) return;
     clunkSynth.triggerAttackRelease('G1', '16n');
-    setTimeout(() => beepSynth.triggerAttackRelease(['C4', 'E4', 'G4'], '8n'), 150);
+    audioTimers.push(setTimeout(() => beepSynth.triggerAttackRelease(['C4', 'E4', 'G4'], '8n'), 150));
     if (humSynth.state !== 'started') humSynth.start();
   }
 
@@ -388,16 +402,13 @@ function initThree(
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.05;
-  controls.maxDistance = 300;
-  controls.minDistance = 22;
   controls.minPolarAngle = Math.PI / 2;
   controls.maxPolarAngle = Math.PI / 2;
   controls.enableZoom = false; // we drive zoom ourselves via mode.zoom
   controls.enablePan = false;  // two-finger drag should never pan the camera
-  // rotateSpeed is set later, once COLS is known.
 
   const hemiLight = new THREE.HemisphereLight(0xffffff, 0x333333, 0.5);
   scene.add(hemiLight);
@@ -450,7 +461,7 @@ function initThree(
   // slots scattered through the deck; these double as the live queue for
   // incoming now-playing tracks. After reserving empties, round COLS up to
   // even so the alternating teal/aluminum bracket pattern wraps cleanly.
-  const ROWS = 12;
+  const ROWS = rows;
   const MIN_EMPTY = 10;
   let COLS = Math.max(8, Math.ceil((tracks.length + MIN_EMPTY) / ROWS));
   if (COLS % 2 === 1) COLS += 1;
@@ -581,7 +592,7 @@ function initThree(
     }
   }
 
-  // --- Full spin7 card generator ---
+  // --- Procedural card-texture generator ---
   function xmur3(str: string) {
     let h = 1779033703 ^ str.length;
     for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
@@ -769,7 +780,8 @@ function initThree(
     else if (layoutStyle === 28) { drawAdvText(art, 128, 25, '16px ' + fScrpt, aTxt, 'center'); drawAdvText(tA, 128, 70, '36px ' + fDisp, mTxt, 'center', 1.2, 1); }
     else if (layoutStyle === 29) { ctx.fillStyle = aTxt; ctx.beginPath(); ctx.moveTo(40, 40); ctx.lineTo(216, 40); ctx.arc(216, 50, 10, -Math.PI / 2, Math.PI / 2); ctx.lineTo(40, 60); ctx.arc(40, 50, 10, Math.PI / 2, -Math.PI / 2); ctx.fill(); drawAdvText(tA, 128, 50, '18px ' + fDisp, getContrast(aTxt), 'center'); drawAdvText(art, 128, 80, '14px ' + fInfo, mTxt, 'center'); drawAdvText(cd, 128, 20, '14px Arimo', mTxt, 'center'); }
 
-    // Source stripe (Spotify integration only — not in spin7)
+    // Coloured stripe along the card's left edge encodes the track's source:
+    // green = currently playing, amber = in queue, none = playlist deck.
     const srcColor = song.source === 'now' ? '#00ff88' : song.source === 'queue' ? '#ffaa00' : null;
     if (srcColor) { ctx.fillStyle = srcColor; ctx.fillRect(0, 0, 4, 100); }
 
@@ -788,6 +800,8 @@ function initThree(
   }
 
   const cards: any[] = [];
+  // O(1) URI → card lookup; kept in sync with `cards` in buildCard / placeIncoming.
+  const cardByUri = new Map<string, any>();
   let activeCard: any = null;
   const cardGeo = new THREE.PlaneGeometry(CARD_W, CARD_H);
 
@@ -857,6 +871,7 @@ function initThree(
       const card = buildCard(t, c, r);
       jukeboxGroup.add(card);
       cards.push(card);
+      cardByUri.set(card.userData.song.uri, card);
     }
   }
 
@@ -864,128 +879,38 @@ function initThree(
   // recycles the oldest previously-queued slot. Returns the (existing or new)
   // card for the given URI, or null if none can be placed.
   function placeIncoming(raw: any): any {
-    const existing = cards.find((c) => c.userData.song.uri === raw.uri);
+    const existing = cardByUri.get(raw.uri);
     if (existing) return existing;
     let slot: { c: number; r: number } | undefined;
     if (emptySlots.length > 0) {
       slot = emptySlots.shift();
-    } else if (queueCards.length > 0) {
-      const oldest = queueCards.shift();
-      slot = { c: oldest.userData.c, r: oldest.userData.r };
-      jukeboxGroup.remove(oldest);
-      cards.splice(cards.indexOf(oldest), 1);
-      try { (oldest.material as any).map?.dispose?.(); (oldest.material as any).dispose?.(); } catch {}
+    } else {
+      // Recycle the oldest queued card — but skip the one that's currently
+      // playing (would otherwise dispose its material while still referenced).
+      // Rotate it to the back of the queue and try the next.
+      while (queueCards.length > 0 && queueCards[0] === activeCard) {
+        queueCards.push(queueCards.shift());
+      }
+      if (queueCards.length > 0) {
+        const oldest = queueCards.shift();
+        slot = { c: oldest.userData.c, r: oldest.userData.r };
+        jukeboxGroup.remove(oldest);
+        cards.splice(cards.indexOf(oldest), 1);
+        cardByUri.delete(oldest.userData.song.uri);
+        try { (oldest.material as any).map?.dispose?.(); (oldest.material as any).dispose?.(); } catch {}
+      }
     }
     if (!slot) return null;
     const card = buildCard(raw, slot.c, slot.r);
     jukeboxGroup.add(card);
     cards.push(card);
+    cardByUri.set(card.userData.song.uri, card);
     queueCards.push(card);
     return card;
   }
 
   setBanner('Select a Track', true); // overridden below if a track is playing
 
-  // --- In-scene chrome buttons parented to the camera (HUD-style) ---
-  // Camera-attached objects render only if the camera itself is in the scene
-  // graph. Add it explicitly, then attach the button row to it. The buttons
-  // ride along with every camera movement → fixed screen position, like an
-  // absolutely positioned div. They still receive real scene lighting and
-  // reflect the env map because they're regular Three.js meshes.
-  scene.add(camera);
-
-  type Btn = { group: any; setLabel: (s: string) => void; visible: (v: boolean) => void };
-  const buttonMeshes: any[] = [];
-
-  function makeChromeButton(initialLabel: string, action: () => void): Btn {
-    const W = 7.5, H = 1.6, D = 0.25;
-    const g = new THREE.Group();
-
-    const bezelMat = new THREE.MeshStandardMaterial({
-      color: 0xeeeeee, metalness: 1.0, roughness: 0.15,
-      depthTest: false, depthWrite: false,
-    });
-    const bezel = new THREE.Mesh(new THREE.BoxGeometry(W, H, D), bezelMat);
-    bezel.renderOrder = 1000;
-    bezel.userData.button = true;
-    g.add(bezel);
-
-    const faceMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, map: null as any,
-      depthTest: false, depthWrite: false,
-    });
-    const face = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.25, H - 0.25), faceMat);
-    face.position.z = D / 2 + 0.001;
-    face.renderOrder = 1001;
-    face.userData.button = true;
-    g.add(face);
-    buttonMeshes.push(bezel, face);
-
-    const setLabel = (text: string) => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 768; canvas.height = 160;
-      const ctx = canvas.getContext('2d')!;
-      // Cream enamel placard (diner sign look)
-      const grad = ctx.createLinearGradient(0, 0, 0, 160);
-      grad.addColorStop(0, '#fff8e7');
-      grad.addColorStop(0.5, '#f3e6c4');
-      grad.addColorStop(1, '#e6d3a0');
-      ctx.fillStyle = grad; ctx.fillRect(0, 0, 768, 160);
-      // Diner-red double border
-      ctx.strokeStyle = '#8b1a1a';
-      ctx.lineWidth = 6; ctx.strokeRect(12, 12, 744, 136);
-      ctx.lineWidth = 2; ctx.strokeRect(24, 24, 720, 112);
-      // 50s placard typography
-      ctx.font = "78px 'Limelight', 'Fascinate', 'Rampart One', 'Bebas Neue', sans-serif";
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      // Emboss
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillText(text, 386, 84, 700);
-      ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.fillText(text, 384, 78, 700);
-      ctx.fillStyle = '#8b1a1a';
-      ctx.fillText(text, 385, 81, 700);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      faceMat.map = tex;
-      faceMat.needsUpdate = true;
-    };
-    setLabel(initialLabel);
-
-    g.userData.action = action;
-    return {
-      group: g,
-      setLabel,
-      visible: (v: boolean) => { g.visible = v; },
-    };
-  }
-
-  // Buttons snap the continuous values to their extremes; the per-frame lerp
-  // produces the spring/bounce feel as the scene catches up.
-  const btnLighting = makeChromeButton(mode.lighting > 0.5 ? 'DINER' : 'RINK', () => {
-    mode.lighting = mode.lighting > 0.5 ? 0 : 1;
-    btnLighting.setLabel(mode.lighting > 0.5 ? 'DINER' : 'RINK');
-  });
-  const btnFit = makeChromeButton(mode.zoom > 0.5 ? 'FIT' : 'ZOOM', () => {
-    mode.zoom = mode.zoom > 0.5 ? 0 : 1;
-    btnFit.setLabel(mode.zoom > 0.5 ? 'FIT' : 'ZOOM');
-  });
-  const btnJump = makeChromeButton('PLAYING', () => {
-    mode.goToActiveCard?.();
-  });
-
-  const buttonRow = new THREE.Group();
-  const spacing = 8.5;
-  btnLighting.group.position.x = -spacing;
-  btnFit.group.position.x = 0;
-  btnJump.group.position.x = spacing;
-  buttonRow.add(btnLighting.group, btnFit.group, btnJump.group);
-  // Top HUD buttons hidden for now — interactions are wheel/drag/double-tap.
-  // camera.add(buttonRow);
-  buttonRow.visible = false;
-  const BUTTON_BASE_FOV = 45;
-  const BUTTON_LOCAL_Z = -40;
-  // Computed each frame in animate() based on current FOV
 
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
@@ -1009,7 +934,7 @@ function initThree(
   // updates the banner, and jumps the drum so it's front-and-center.
   function syncNowPlaying(item: any) {
     if (!item?.uri) return;
-    let match = cards.find((c) => c.userData.song.uri === item.uri);
+    let match = cardByUri.get(item.uri);
     if (!match) {
       match = placeIncoming({
         uri: item.uri,
@@ -1034,7 +959,10 @@ function initThree(
     playSelectionSound();
     activeCard = card;
     setBanner(`♫ ${card.userData.song.name} — ${card.userData.song.artist} ♫`, false);
-    try { await play(card.userData.song.uri); } catch {}
+    // Skip the API call for fake debug URIs.
+    if (!mode.debug) {
+      try { await play(card.userData.song.uri); } catch {}
+    }
   }
 
   // Tap/drag/pinch handling:
@@ -1051,9 +979,8 @@ function initThree(
   let pinchBaseDist = 0;
   let pinchBaseZoom = 0;
   let isPinching = false;
-  function getXY(event: any) {
-    const e = event.touches ? event.touches[0] : event;
-    return { x: e.clientX, y: e.clientY };
+  function getXY(event: PointerEvent) {
+    return { x: event.clientX, y: event.clientY };
   }
   function onPointerDown(event: any) {
     initAudio();
@@ -1096,21 +1023,13 @@ function initThree(
     }
     if (activePointers.size > 0) return; // wait for all fingers to lift
     isDragging = false;
-    const { x, y } = getXY(event.changedTouches ? { touches: event.changedTouches } : event);
+    const { x, y } = getXY(event);
     const dx = x - downX, dy = y - downY;
     if (Math.hypot(dx, dy) > DRAG_THRESHOLD) return;
     if (Date.now() - downAt > 500) return;
     mouse.x = (x / window.innerWidth) * 2 - 1;
     mouse.y = -(y / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
-    const btnHits = raycaster.intersectObjects(buttonMeshes, true);
-    if (btnHits.length) {
-      let m: any = btnHits[0].object;
-      while (m && !m.userData?.action) m = m.parent;
-      m?.userData?.action?.();
-      lastTapAt = 0; // don't let a button-tap chain into a double-tap
-      return;
-    }
     const hits = raycaster.intersectObjects(cards);
     if (hits.length) { selectCard(hits[0].object); lastTapAt = 0; return; }
     // Empty space (chrome / background) — detect double tap → toggle zoom
@@ -1146,12 +1065,17 @@ function initThree(
 
   // Poll now-playing. syncNowPlaying handles deck lookup, queue placement,
   // LED positioning, and the jump-to-card camera move.
-  const pollInterval = setInterval(async () => {
-    try {
-      const d = await nowPlaying();
-      if (d?.item) syncNowPlaying(d.item);
-    } catch {}
-  }, 5000);
+  // Skipped in demo mode — the demo route is a passive orbit and shouldn't
+  // burn Spotify API quota (or 401 for anonymous viewers).
+  // No poll in demo (passive orbit) or debug (fake URIs) modes.
+  const pollInterval: ReturnType<typeof setInterval> | null = (mode.demoSpin || mode.debug)
+    ? null
+    : setInterval(async () => {
+        try {
+          const d = await nowPlaying();
+          if (d?.item) syncNowPlaying(d.item);
+        } catch {}
+      }, 8000);
 
   // Smooth jukebox-drum rotation to bring the active card front-and-center.
   // We rotate the group (not the camera) — OrbitControls' damping fights direct
@@ -1186,6 +1110,27 @@ function initThree(
 
   const clock = new THREE.Clock();
   let raf = 0;
+
+  // Scratch objects reused across frames to avoid 20+ allocations/frame.
+  const _camOffset = new THREE.Vector3();
+  const _camRight = new THREE.Vector3();
+  const _camTarget = new THREE.Vector3();
+  const _camLerpTarget = new THREE.Vector3();
+  const _origin = new THREE.Vector3(0, 0, 0);
+  const _tColor1 = new THREE.Color();
+  const _tColor2 = new THREE.Color();
+  const _dColor1 = new THREE.Color(0xffeedd);
+  const _dColor2 = new THREE.Color(0xaaeeff);
+  const _rColor1 = new THREE.Color();
+  const _rColor2 = new THREE.Color();
+  const _scratchA = new THREE.Color();
+  const _scratchB = new THREE.Color();
+  const _scratchC = new THREE.Color();
+  const _ambientWarm = new THREE.Color(0xffb060);
+  const _camLightWarm = new THREE.Color(0xffb878);
+  const _ledBase = new THREE.Color(0xffd580);
+  const _ledTgt = new THREE.Color();
+
   function animate() {
     raf = requestAnimationFrame(animate);
     if (!isSceneReady) {
@@ -1228,27 +1173,6 @@ function initThree(
 
     controls.update();
 
-    // Keep HUD buttons at constant screen size as FOV changes. Aspect-aware
-    // vertical placement near the top of the viewport.
-    {
-      const halfFov = (camera.fov * Math.PI) / 360;
-      const halfBase = (BUTTON_BASE_FOV * Math.PI) / 360;
-      const scale = Math.tan(halfFov) / Math.tan(halfBase);
-      const visibleHalfH = Math.abs(BUTTON_LOCAL_Z) * Math.tan(halfFov);
-      buttonRow.position.set(0, visibleHalfH - 1.8 * scale, BUTTON_LOCAL_Z);
-      buttonRow.scale.setScalar(scale);
-    }
-
-    // Hide JUMP TO PLAYING when nothing is active
-    btnJump.visible(!!activeCard);
-    // Sync toggle labels to current continuous values
-    {
-      const wantLight = mode.lighting > 0.5 ? 'DINER' : 'RINK';
-      if (btnLighting._label !== wantLight) { btnLighting.setLabel(wantLight); btnLighting._label = wantLight; }
-      const wantZoom = mode.zoom > 0.5 ? 'FIT' : 'ZOOM';
-      if (btnFit._label !== wantZoom) { btnFit.setLabel(wantZoom); btnFit._label = wantZoom; }
-    }
-
     const dist = camera.position.length();
     scene.fog.near = dist + 30; scene.fog.far = dist + 250;
 
@@ -1271,22 +1195,21 @@ function initThree(
       const azi = controls.getAzimuthalAngle();
       const tx = Math.sin(azi) * (R + targetDist);
       const tz = Math.cos(azi) * (R + targetDist);
-      camera.position.lerp(new THREE.Vector3(tx, 0, tz), 0.12);
-      controls.target.lerp(new THREE.Vector3(0, 0, 0), 0.12);
+      _camLerpTarget.set(tx, 0, tz);
+      camera.position.lerp(_camLerpTarget, 0.12);
+      controls.target.lerp(_origin, 0.12);
     }
 
     // Offset the camera headlight to the right of the camera (relative to its
     // view direction), then aim it at the focal point. This grazes the cards
     // from the side instead of blowing out the center.
-    const camToTarget = new THREE.Vector3().subVectors(controls.target, camera.position);
-    const right = new THREE.Vector3().crossVectors(camToTarget, camera.up).normalize();
-    const offsetDist = camToTarget.length() * 0.6;
-    cameraLight.position.copy(camera.position).addScaledVector(right, offsetDist);
+    _camOffset.subVectors(controls.target, camera.position);
+    _camRight.crossVectors(_camOffset, camera.up).normalize();
+    const offsetDist = _camOffset.length() * 0.6;
+    cameraLight.position.copy(camera.position).addScaledVector(_camRight, offsetDist);
     cameraLight.target.position.copy(controls.target);
 
     const t = clock.getElapsedTime();
-    const tColor1 = new THREE.Color();
-    const tColor2 = new THREE.Color();
 
     // Continuous lighting blend: L=0 diner, L=1 rink. Compute both endpoints,
     // lerp by L. Fill lights ramp with the rink share.
@@ -1304,25 +1227,21 @@ function initThree(
     const dDir = ftt(0.75, 0.0);
     const dAmb = ftt(0.0, 0.55);
     const dCam = ftt(0.0, 0.2);
-    const dColor1 = new THREE.Color(0xffeedd);
-    const dColor2 = new THREE.Color(0xaaeeff);
 
     // Rink endpoint — moody, optionally driven by the active card's palette
     let rHemi: number, rDir: number;
-    const rColor1 = new THREE.Color();
-    const rColor2 = new THREE.Color();
     if (activeCard) {
-      const c1 = new THREE.Color(activeCard.userData.accentColor);
-      const c2 = new THREE.Color(activeCard.userData.bgColor);
-      const c3 = new THREE.Color(activeCard.userData.altColor || '#fff');
+      _scratchA.set(activeCard.userData.accentColor);
+      _scratchB.set(activeCard.userData.bgColor);
+      _scratchC.set(activeCard.userData.altColor || '#ffffff');
       const cycle = (Math.sin(t * 1.5) + 1) / 2;
-      rColor1.lerpColors(c1, c2, cycle);
-      rColor2.lerpColors(c2, c3, 1 - cycle);
+      _rColor1.lerpColors(_scratchA, _scratchB, cycle);
+      _rColor2.lerpColors(_scratchB, _scratchC, 1 - cycle);
       rHemi = ftt(0.1, 0.0);
       rDir = ftt(0.1, 0.0);
     } else {
-      rColor1.setHSL((t * 0.1) % 1, 0.9, 0.6);
-      rColor2.setHSL(((t * 0.1) + 0.5) % 1, 0.9, 0.6);
+      _rColor1.setHSL((t * 0.1) % 1, 0.9, 0.6);
+      _rColor2.setHSL(((t * 0.1) + 0.5) % 1, 0.9, 0.6);
       rHemi = ftt(0.4, 0.0);
       rDir = ftt(0.6, 0.0);
     }
@@ -1334,12 +1253,12 @@ function initThree(
     hemiLight.intensity += (targetHemi - hemiLight.intensity) * 0.05;
     dirLight.intensity += (targetDir - dirLight.intensity) * 0.05;
     ambientLight.intensity += (targetAmbient - ambientLight.intensity) * 0.05;
-    ambientLight.color.lerp(new THREE.Color(0xffb060), 0.05);
+    ambientLight.color.lerp(_ambientWarm, 0.05);
     cameraLight.intensity += (targetCamLight - cameraLight.intensity) * 0.05;
-    cameraLight.color.lerp(new THREE.Color(0xffb878), 0.05);
+    cameraLight.color.lerp(_camLightWarm, 0.05);
 
-    tColor1.lerpColors(dColor1, rColor1, L);
-    tColor2.lerpColors(dColor2, rColor2, L);
+    _tColor1.lerpColors(_dColor1, _rColor1, L);
+    _tColor2.lerpColors(_dColor2, _rColor2, L);
 
     const az = controls.getAzimuthalAngle();
     dirLight.position.set(Math.sin(az) * 100, 100, Math.cos(az) * 100);
@@ -1348,12 +1267,12 @@ function initThree(
     // across the cards. Grazes instead of washing.
     const azOff = az + Math.PI / 2.5;
     fillFrontAmber.position.set(Math.sin(azOff) * 35, 22, Math.cos(azOff) * 35);
-    pointLight1.color.lerp(tColor1, 0.03);
-    neonTop.material.color.lerp(tColor1, 0.03);
-    neonTop.material.emissive.lerp(tColor1, 0.03);
-    pointLight2.color.lerp(tColor2, 0.03);
-    neonBot.material.color.lerp(tColor2, 0.03);
-    neonBot.material.emissive.lerp(tColor2, 0.03);
+    pointLight1.color.lerp(_tColor1, 0.03);
+    neonTop.material.color.lerp(_tColor1, 0.03);
+    neonTop.material.emissive.lerp(_tColor1, 0.03);
+    pointLight2.color.lerp(_tColor2, 0.03);
+    neonBot.material.color.lerp(_tColor2, 0.03);
+    neonBot.material.emissive.lerp(_tColor2, 0.03);
     if (activeCard) {
       // Cross-fade LEDs when the active card changes: fade out at the old
       // location, jump to the new location while dark, fade back in. No more
@@ -1371,10 +1290,11 @@ function initThree(
         localLed1.intensity += (5.0 - localLed1.intensity) * 0.1;
         localLed2.intensity += (5.0 - localLed2.intensity) * 0.1;
       }
-      const tgt = new THREE.Color(0xffd580).lerp(new THREE.Color(activeCard.userData.accentColor), 0.15);
-      ledMat.color.lerp(tgt, 0.1);
-      localLed1.color.lerp(tgt, 0.1);
-      localLed2.color.lerp(tgt, 0.1);
+      _scratchA.set(activeCard.userData.accentColor);
+      _ledTgt.copy(_ledBase).lerp(_scratchA, 0.15);
+      ledMat.color.lerp(_ledTgt, 0.1);
+      localLed1.color.lerp(_ledTgt, 0.1);
+      localLed2.color.lerp(_ledTgt, 0.1);
 
       // Multiple staggered tracker pairs sweep both directions on the rim.
       const TRACKER_SPEED = 0.4; // cycles per second
@@ -1385,9 +1305,9 @@ function initThree(
         const ang = thetaActive + tr.dir * Math.PI * (1 - progress);
         tr.mesh.position.set(Math.sin(ang) * TRACKER_R, TRACKER_Y, Math.cos(ang) * TRACKER_R);
         tr.light.intensity = 3 + Math.sin(progress * Math.PI) * 4;
-        tr.light.color.lerp(tgt, 0.1);
+        tr.light.color.lerp(_ledTgt, 0.1);
       }
-      trackerMat.color.lerp(tgt, 0.1);
+      trackerMat.color.lerp(_ledTgt, 0.1);
     } else {
       localLed1.intensity += -localLed1.intensity * 0.1;
       localLed2.intensity += -localLed2.intensity * 0.1;
@@ -1407,7 +1327,7 @@ function initThree(
 
   return () => {
     cancelAnimationFrame(raf);
-    clearInterval(pollInterval);
+    if (pollInterval !== null) clearInterval(pollInterval);
     introTimers.forEach(clearTimeout);
     window.removeEventListener('pointerdown', onPointerDown);
     window.removeEventListener('pointermove', onPointerMove);
@@ -1415,8 +1335,23 @@ function initThree(
     window.removeEventListener('pointercancel', onPointerUp);
     window.removeEventListener('resize', onResize);
     renderer.domElement.removeEventListener('wheel', onWheel);
-    camera.remove(buttonRow);
-    scene.remove(camera);
+    disposeAudio();
+
+    // Walk the scene graph and dispose every GPU resource. WebGL leaks
+    // textures/buffers per route change without this — renderer.dispose()
+    // alone only frees the GL context.
+    scene.traverse((obj: any) => {
+      if (obj.geometry?.dispose) obj.geometry.dispose();
+      const mats = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+      for (const m of mats) {
+        for (const k of ['map', 'emissiveMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'alphaMap', 'aoMap', 'bumpMap', 'displacementMap', 'envMap']) {
+          if (m[k]?.dispose) m[k].dispose();
+        }
+        if (m.dispose) m.dispose();
+      }
+    });
+    if ((scene as any).environment?.dispose) (scene as any).environment.dispose();
+    if ((scene as any).background?.dispose) (scene as any).background.dispose();
     renderer.dispose();
     container.removeChild(renderer.domElement);
   };

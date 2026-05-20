@@ -21,9 +21,6 @@ export function setStoredClientId(id: string) {
   if (v) localStorage.setItem(CLIENT_ID_KEY, v);
   else localStorage.removeItem(CLIENT_ID_KEY);
 }
-export function hasClientId(): boolean {
-  return !!clientId();
-}
 const SCOPES = [
   'user-read-playback-state',
   'user-modify-playback-state',
@@ -36,6 +33,7 @@ const LS_ACCESS = 'sp_access';
 const LS_REFRESH = 'sp_refresh';
 const LS_EXPIRES = 'sp_expires';
 const SS_VERIFIER = 'sp_verifier';
+const SS_STATE = 'sp_state';
 
 function redirectUri() {
   return `${window.location.origin}/callback`;
@@ -59,8 +57,14 @@ async function challenge(verifier: string) {
 }
 
 export async function login() {
+  // PKCE: verifier + code_challenge protects the code exchange.
+  // state: random nonce stored in sessionStorage, echoed back by Spotify on
+  // the redirect; verified in /callback. Closes the CSRF window that PKCE
+  // alone doesn't cover (the flow *initiation*).
   const verifier = randomVerifier();
+  const state = randomVerifier(16);
   sessionStorage.setItem(SS_VERIFIER, verifier);
+  sessionStorage.setItem(SS_STATE, state);
   const code_challenge = await challenge(verifier);
   const params = new URLSearchParams({
     client_id: clientId(),
@@ -68,9 +72,16 @@ export async function login() {
     redirect_uri: redirectUri(),
     code_challenge_method: 'S256',
     code_challenge,
+    state,
     scope: SCOPES,
   });
   window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+}
+
+export function consumeState(): string | null {
+  const s = sessionStorage.getItem(SS_STATE);
+  sessionStorage.removeItem(SS_STATE);
+  return s;
 }
 
 export function logout() {
@@ -137,7 +148,7 @@ export function isLoggedIn() {
   return !!localStorage.getItem(LS_REFRESH);
 }
 
-export async function spotify(path: string, init: RequestInit = {}): Promise<any> {
+export async function spotify(path: string, init: RequestInit = {}, _retry = 0): Promise<any> {
   const token = await getToken();
   if (!token) throw new Error('not authenticated');
   const res = await fetch(`https://api.spotify.com/v1${path}`, {
@@ -149,11 +160,12 @@ export async function spotify(path: string, init: RequestInit = {}): Promise<any
     },
   });
   if (res.status === 204) return null;
-  if (res.status === 401) {
-    // Token might've been revoked; try a refresh once
+  if (res.status === 401 && _retry === 0) {
+    // Token may have been revoked or expired; refresh once and retry.
+    // _retry guard ensures we never loop on a persistently-bad token.
     const t = await refresh();
     if (!t) throw new Error('not authenticated');
-    return spotify(path, init);
+    return spotify(path, init, _retry + 1);
   }
   const text = await res.text();
   if (!res.ok) throw new Error(`${res.status}: ${text}`);
@@ -207,9 +219,11 @@ export async function loadAllTracks(playlistIds: string[]) {
 
   for (const id of playlistIds) {
     try {
-      // Spotify's response shape varies: new format uses `items.items[].item`,
-      // legacy uses `tracks.items[].track`. Handle both. The /tracks sub-endpoint
-      // 403s for many accounts so we fetch /playlists/{id} directly.
+      // Use /playlists/{id} (not /playlists/{id}/tracks — that sub-endpoint
+      // 403s for many accounts). The container can show up as either
+      // `tracks` or `items`, and each row's track as `track` or `item`,
+      // depending on whether Spotify served the legacy or additional-types
+      // shape — accept both.
       const p: any = await spotify(`/playlists/${id}`);
       const container = p?.items ?? p?.tracks;
       let items: any[] = container?.items ?? [];
@@ -308,6 +322,4 @@ export async function play(uri?: string) {
     body: body ? JSON.stringify(body) : undefined,
   });
 }
-export const pause = () => spotify('/me/player/pause', { method: 'PUT' });
-export const skipNext = () => spotify('/me/player/next', { method: 'POST' });
 export const nowPlaying = () => spotify('/me/player/currently-playing');
