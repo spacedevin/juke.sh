@@ -1036,21 +1036,154 @@ function initThree(
     }
   }
 
-  // Thin Three.js wrapper around the standalone card-art module.
-  // Builds a CanvasTexture from the canvas the generator returns.
-  function generateCardTexture(song: any) {
-    const { canvas, accent, bg, alt } = generateCardArt(song);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    texture.minFilter = THREE.LinearFilter;
-    return { texture, accent, bg, alt };
+  // Cards as InstancedMesh + texture atlas.
+  // Before: COLS*ROWS draw calls, one Mesh + Material + CanvasTexture per card.
+  // After:  ceil(N / CELLS_PER_ATLAS) draw calls — one InstancedMesh per atlas.
+  //         For a 320-card deck that's 1 draw call vs 320. Each card still
+  //         renders from a 256×100 region with the same anisotropy and minFilter
+  //         as before, so pixel-for-pixel output is identical.
+  //
+  // Layout: each atlas packs up to 16 × 40 = 640 cells in a 4096² canvas.
+  // A slot (c, r) maps deterministically to a fixed (atlasIdx, cellIdx) so
+  // "recycling" a card via placeIncoming just redraws its existing cell in the
+  // existing atlas — no instance reassignment needed.
+  const ATLAS_SIZE = 4096;
+  const CELL_W = 256;
+  const CELL_H = 100;
+  const COLS_PER_ATLAS = Math.floor(ATLAS_SIZE / CELL_W); // 16
+  const ROWS_PER_ATLAS = Math.floor(ATLAS_SIZE / CELL_H); // 40
+  const CELLS_PER_ATLAS = COLS_PER_ATLAS * ROWS_PER_ATLAS; // 640
+  const totalSlots = COLS * ROWS;
+  const atlasCount = Math.max(1, Math.ceil(totalSlots / CELLS_PER_ATLAS));
+
+  // Looks like a Three.js Mesh's `.userData` sub-object to every consumer
+  // (selectCard, ledMoveTo, the animate-loop lighting block) so we don't have
+  // to rewrite every `card.userData.X` access — just swap the backing object.
+  type CardRef = {
+    userData: {
+      isCard: true;
+      song: any;
+      baseY: number;
+      theta: number;
+      c: number;
+      r: number;
+      accentColor: string;
+      bgColor: string;
+      altColor: string;
+      accentCol: THREE.Color;
+      bgCol: THREE.Color;
+      altCol: THREE.Color;
+    };
+    atlasIdx: number;
+    cellIdx: number;
+  };
+
+  type Atlas = {
+    canvas: HTMLCanvasElement;
+    ctx: CanvasRenderingContext2D;
+    texture: THREE.CanvasTexture;
+    mesh: THREE.InstancedMesh;
+    capacity: number;
+    cellRefs: (CardRef | null)[];
+  };
+
+  const cards: CardRef[] = [];
+  // O(1) URI → card lookup; kept in sync with `cards` in buildCard / placeIncoming.
+  const cardByUri = new Map<string, CardRef>();
+  let activeCard: CardRef | null = null;
+  const atlases: Atlas[] = [];
+  // Raycast targets — each entry is the InstancedMesh for one atlas.
+  const cardInstancedMeshes: THREE.InstancedMesh[] = [];
+
+  // Per-instance UV rect (offsetX, offsetY, scaleX, scaleY). Determined entirely
+  // by the cell's grid position in the atlas. Inset by 0.5 px on every side so
+  // linear filtering at the cell edge never reaches outside this cell (would
+  // otherwise show a thin colored bleed at every card border).
+  function makeAtlasGeo(capacity: number) {
+    const geo = new THREE.PlaneGeometry(CARD_W, CARD_H);
+    const aUvRect = new Float32Array(capacity * 4);
+    const inset = 0.5 / ATLAS_SIZE;
+    for (let i = 0; i < capacity; i++) {
+      const col = i % COLS_PER_ATLAS;
+      const row = Math.floor(i / COLS_PER_ATLAS);
+      // WebGL UV origin is bottom-left; canvas is top-down. Row 0 sits at
+      // canvas y∈[0, CELL_H], which is UV-y∈[1 - CELL_H/ATLAS_SIZE, 1].
+      aUvRect[i * 4 + 0] = (col * CELL_W) / ATLAS_SIZE + inset;
+      aUvRect[i * 4 + 1] = 1 - ((row + 1) * CELL_H) / ATLAS_SIZE + inset;
+      aUvRect[i * 4 + 2] = (CELL_W - 1) / ATLAS_SIZE;
+      aUvRect[i * 4 + 3] = (CELL_H - 1) / ATLAS_SIZE;
+    }
+    geo.setAttribute('aUvRect', new THREE.InstancedBufferAttribute(aUvRect, 4));
+    return geo;
   }
 
-  const cards: any[] = [];
-  // O(1) URI → card lookup; kept in sync with `cards` in buildCard / placeIncoming.
-  const cardByUri = new Map<string, any>();
-  let activeCard: any = null;
-  const cardGeo = new THREE.PlaneGeometry(CARD_W, CARD_H);
+  function makeAtlasMat(texture: THREE.CanvasTexture) {
+    // Same MeshStandardMaterial params as the original per-card material —
+    // identical shading.
+    const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85, metalness: 0 });
+    mat.onBeforeCompile = (shader) => {
+      shader.vertexShader = 'attribute vec4 aUvRect;\n' + shader.vertexShader.replace(
+        '#include <uv_vertex>',
+        `#include <uv_vertex>
+        #ifdef USE_MAP
+          vMapUv = uv * aUvRect.zw + aUvRect.xy;
+        #endif
+        `
+      );
+    };
+    return mat;
+  }
+
+  {
+    // Build atlases up front. Empty cells get a zero-scale matrix so they
+    // don't render; buildCard fills in real matrices as cards arrive.
+    const hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+    for (let a = 0; a < atlasCount; a++) {
+      const startSlot = a * CELLS_PER_ATLAS;
+      const capacity = Math.min(CELLS_PER_ATLAS, totalSlots - startSlot);
+      const canvas = document.createElement('canvas');
+      canvas.width = ATLAS_SIZE;
+      canvas.height = ATLAS_SIZE;
+      const ctx = canvas.getContext('2d')!;
+      const texture = new THREE.CanvasTexture(canvas);
+      // Same filtering as the old per-card CanvasTexture — quality unchanged.
+      texture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      texture.minFilter = THREE.LinearFilter;
+      const geo = makeAtlasGeo(capacity);
+      const mat = makeAtlasMat(texture);
+      const mesh = new THREE.InstancedMesh(geo, mat, capacity);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      // Default bounding sphere is one card. Skip frustum culling so the
+      // InstancedMesh isn't dropped when the camera is close to the drum.
+      mesh.frustumCulled = false;
+      for (let i = 0; i < capacity; i++) mesh.setMatrixAt(i, hiddenMatrix);
+      mesh.instanceMatrix.needsUpdate = true;
+      jukeboxGroup.add(mesh);
+      cardInstancedMeshes.push(mesh);
+      atlases.push({ canvas, ctx, texture, mesh, capacity, cellRefs: Array(capacity).fill(null) });
+    }
+  }
+
+  function slotToAtlas(c: number, r: number) {
+    const idx = c * ROWS + r;
+    return { atlasIdx: Math.floor(idx / CELLS_PER_ATLAS), cellIdx: idx % CELLS_PER_ATLAS };
+  }
+
+  function stampCell(atlasIdx: number, cellIdx: number, art: HTMLCanvasElement) {
+    const atlas = atlases[atlasIdx];
+    const col = cellIdx % COLS_PER_ATLAS;
+    const row = Math.floor(cellIdx / COLS_PER_ATLAS);
+    atlas.ctx.clearRect(col * CELL_W, row * CELL_H, CELL_W, CELL_H);
+    atlas.ctx.drawImage(art, col * CELL_W, row * CELL_H);
+    // needsUpdate is just a flag — Three batches subsequent stamps into a
+    // single texSubImage2D before the next render. Stamping 320 cards on init
+    // triggers one upload, not 320.
+    atlas.texture.needsUpdate = true;
+  }
+
+  // Reused across buildCard calls — Object3D allocations aren't free.
+  const cardDummy = new THREE.Object3D();
 
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
   const categories = ['extended play', 'varieties', 'your picks', 'favorites', 'soul', 'popular', 'hit tunes', 'jazz', 'country', 'rock & roll'];
@@ -1065,7 +1198,7 @@ function initThree(
   const emptySlots: { c: number; r: number }[] = [];
   const queueCards: any[] = [];
 
-  function buildCard(t: any, c: number, r: number) {
+  function buildCard(t: any, c: number, r: number): CardRef {
     const theta = -Math.PI + c * COL_ANGLE + COL_ANGLE / 2;
     const words = (t.name || '').split(/\s+/).filter(Boolean);
     const half = Math.ceil(words.length / 2);
@@ -1073,27 +1206,36 @@ function initThree(
     const titleB = words.length > 1 ? words.slice(half).join(' ') : (t.album || t.name || '');
     const code = letters[c % letters.length] + (r + 1);
     const song = { ...t, titleA, titleB, code };
-    const { texture, accent, bg, alt } = generateCardTexture(song);
-    const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.85, metalness: 0 });
-    const card = new THREE.Mesh(cardGeo, mat);
-    card.castShadow = true; card.receiveShadow = true;
+    const { canvas: art, accent, bg, alt } = generateCardArt(song);
+    const { atlasIdx, cellIdx } = slotToAtlas(c, r);
+    stampCell(atlasIdx, cellIdx, art);
     const x = Math.sin(theta) * (R + 0.05);
     const z = Math.cos(theta) * (R + 0.05);
     const y = startY - r * ROW_SPACING;
-    card.position.set(x, y, z);
-    card.rotation.y = theta;
-    card.userData = {
-      isCard: true, song, baseY: y, theta, c, r,
-      // Hex strings (still used by external consumers).
-      accentColor: accent, bgColor: bg, altColor: alt,
-      // Pre-parsed Color objects — the rink-mode lighting block reads these
-      // every frame while the card is active. `set('#abcdef')` parses the
-      // string on every call; `copy()` is a 3-float copy.
-      accentCol: new THREE.Color(accent),
-      bgCol: new THREE.Color(bg),
-      altCol: new THREE.Color(alt || '#ffffff'),
+    cardDummy.position.set(x, y, z);
+    cardDummy.rotation.set(0, theta, 0);
+    cardDummy.scale.set(1, 1, 1);
+    cardDummy.updateMatrix();
+    const atlas = atlases[atlasIdx];
+    atlas.mesh.setMatrixAt(cellIdx, cardDummy.matrix);
+    atlas.mesh.instanceMatrix.needsUpdate = true;
+    const ref: CardRef = {
+      userData: {
+        isCard: true, song, baseY: y, theta, c, r,
+        // Hex strings (still used by external consumers).
+        accentColor: accent, bgColor: bg, altColor: alt,
+        // Pre-parsed Color objects — the rink-mode lighting block reads these
+        // every frame while the card is active. `set('#abcdef')` parses the
+        // string on every call; `copy()` is a 3-float copy.
+        accentCol: new THREE.Color(accent),
+        bgCol: new THREE.Color(bg),
+        altCol: new THREE.Color(alt || '#ffffff'),
+      },
+      atlasIdx,
+      cellIdx,
     };
-    return card;
+    atlas.cellRefs[cellIdx] = ref;
+    return ref;
   }
 
   // Bottom-rim category labels as a single InstancedMesh + texture atlas.
@@ -1175,7 +1317,6 @@ function initThree(
       const t = displayTracks[idx];
       if (!t) { emptySlots.push({ c, r }); continue; }
       const card = buildCard(t, c, r);
-      jukeboxGroup.add(card);
       cards.push(card);
       cardByUri.set(card.userData.song.uri, card);
     }
@@ -1184,7 +1325,7 @@ function initThree(
   // Add a new now-playing track. Uses an empty slot if available, otherwise
   // recycles the oldest previously-queued slot. Returns the (existing or new)
   // card for the given URI, or null if none can be placed.
-  function placeIncoming(raw: any): any {
+  function placeIncoming(raw: any): CardRef | null {
     const existing = cardByUri.get(raw.uri);
     if (existing) return existing;
     let slot: { c: number; r: number } | undefined;
@@ -1192,30 +1333,26 @@ function initThree(
       slot = emptySlots.shift();
     } else {
       // Recycle the oldest queued card — but skip the one that's currently
-      // playing (would otherwise dispose its material while still referenced).
-      // Rotate it to the back of the queue and try the next.
+      // playing. Rotate it to the back of the queue and try the next.
       while (queueCards.length > 0 && queueCards[0] === activeCard) {
-        queueCards.push(queueCards.shift());
+        queueCards.push(queueCards.shift()!);
       }
       if (queueCards.length > 0) {
-        const oldest = queueCards.shift();
+        const oldest = queueCards.shift()!;
         slot = { c: oldest.userData.c, r: oldest.userData.r };
-        jukeboxGroup.remove(oldest);
         cards.splice(cards.indexOf(oldest), 1);
         cardByUri.delete(oldest.userData.song.uri);
-        try { (oldest.material as any).map?.dispose?.(); (oldest.material as any).dispose?.(); } catch {}
+        // The atlas cell gets overwritten by buildCard below — there's no
+        // per-card material or texture to dispose anymore.
       }
     }
     if (!slot) return null;
     const card = buildCard(raw, slot.c, slot.r);
-    jukeboxGroup.add(card);
     cards.push(card);
     cardByUri.set(card.userData.song.uri, card);
     queueCards.push(card);
-    // Force the back-of-drum cull AND the throttled shadow to re-evaluate
-    // next frame so the new card gets its visibility + shadow set (otherwise
-    // it could pop in/out, or cast no shadow until the camera moves).
-    lastCullRot = NaN;
+    // Force the throttled shadow to re-evaluate next frame so the new card
+    // casts shadow without waiting for the camera to move.
     lastShadowAz = NaN;
     return card;
   }
@@ -1340,8 +1477,14 @@ function initThree(
     mouse.x = (x / window.innerWidth) * 2 - 1;
     mouse.y = -(y / window.innerHeight) * 2 + 1;
     raycaster.setFromCamera(mouse, camera);
-    const hits = raycaster.intersectObjects(cards);
-    if (hits.length) { selectCard(hits[0].object); lastTapAt = 0; return; }
+    const hits = raycaster.intersectObjects(cardInstancedMeshes);
+    if (hits.length) {
+      const hit = hits[0];
+      const atlasIdx = cardInstancedMeshes.indexOf(hit.object as THREE.InstancedMesh);
+      const cellIdx = hit.instanceId;
+      const ref = atlasIdx >= 0 && cellIdx != null ? atlases[atlasIdx].cellRefs[cellIdx] : null;
+      if (ref) { selectCard(ref); lastTapAt = 0; return; }
+    }
     // Empty space (chrome / background) — detect double tap → toggle zoom
     const now = Date.now();
     if (now - lastTapAt < DOUBLE_TAP_MS) {
@@ -1449,11 +1592,6 @@ function initThree(
 
   const clock = new THREE.Clock();
   let raf = 0;
-  // Sentinels for cheap "did anything that affects card visibility change?"
-  // (skips the back-of-drum cull when nothing moved). NaN guarantees the
-  // first frame runs the cull pass.
-  let lastCullRot = NaN;
-  let lastCullCamAz = NaN;
   // Shadow-update throttling. We trigger a shadow rebuild only when the
   // azimuth (which moves dirLight) or the drum's rotation (which moves the
   // shadow casters) has actually changed since the last shadow render.
@@ -1703,32 +1841,22 @@ function initThree(
         tr.light.intensity = 0;
       }
     }
-    // Back-of-drum culling. Cards on the far side of the drum are still
-    // submitted to the GPU even though backface-cull discards their fragments.
-    // Hiding them outright (set .visible = false) skips frustum + draw-call
-    // submission entirely. Re-evaluate only when the drum OR the camera has
-    // rotated since last frame.
-    const camAz = Math.atan2(camera.position.x, camera.position.z);
-    const groupRot = jukeboxGroup.rotation.y;
-    if (groupRot !== lastCullRot || camAz !== lastCullCamAz) {
-      lastCullRot = groupRot;
-      lastCullCamAz = camAz;
-      const limit = -0.34; // cos(110°) — keeps front + sides, drops the back third
-      for (const c of cards) {
-        const dotFront = Math.cos(c.userData.theta + groupRot - camAz);
-        c.visible = dotFront > limit;
-      }
-    }
+    // The previous back-of-drum cull (one JS loop hiding ~40% of cards each
+    // frame) is gone — with all cards now in one InstancedMesh there's no
+    // per-card draw-call cost left to claw back. The GPU still backface-culls
+    // the rear-facing FrontSide planes for free.
+    //
     // Shadow refresh trigger. The dirLight tracks the camera azimuth, so the
     // shadow projection changes whenever az changes; the drum rotation moves
     // every card so the shadow casters move with groupRot. When both are still,
     // the previous shadow map is still mathematically correct — skip the pass.
     // placeIncoming() force-triggers an update by NaN-ing lastShadowAz.
-    if (Math.abs(camAz - lastShadowAz) > SHADOW_MOVEMENT_EPS ||
+    const groupRot = jukeboxGroup.rotation.y;
+    if (Math.abs(az - lastShadowAz) > SHADOW_MOVEMENT_EPS ||
         Math.abs(groupRot - lastShadowGroupRot) > SHADOW_MOVEMENT_EPS ||
         Number.isNaN(lastShadowAz)) {
       dirLight.shadow.needsUpdate = true;
-      lastShadowAz = camAz;
+      lastShadowAz = az;
       lastShadowGroupRot = groupRot;
     }
     renderer.render(scene, camera);
