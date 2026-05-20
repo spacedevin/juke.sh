@@ -52,7 +52,16 @@ function SettingsModal({
   onChangeRows,
   onClose,
 }: {
-  modeRef: { current: { spin: number; showCategories: boolean; zoomTight: number; zoomFlat: number } };
+  modeRef: {
+    current: {
+      spin: number;
+      showCategories: boolean;
+      zoomTight: number;
+      zoomFlat: number;
+      audioEnabled: boolean;
+      setAudioEnabled?: (enabled: boolean) => void;
+    };
+  };
   rows: number;
   onChangeRows: (n: number) => void;
   onClose: () => void;
@@ -63,6 +72,7 @@ function SettingsModal({
   const [showCategories, setShowCategories] = useState(modeRef.current.showCategories);
   const [zoomTight, setZoomTight] = useState(modeRef.current.zoomTight);
   const [zoomFlat, setZoomFlat] = useState(modeRef.current.zoomFlat);
+  const [audioEnabled, setAudioEnabled] = useState(modeRef.current.audioEnabled);
 
   // ESC to close
   useEffect(() => {
@@ -71,7 +81,7 @@ function SettingsModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const update = <K extends 'spin' | 'showCategories' | 'zoomTight' | 'zoomFlat'>(k: K, v: any) => {
+  const update = <K extends 'spin' | 'showCategories' | 'zoomTight' | 'zoomFlat' | 'audioEnabled'>(k: K, v: any) => {
     (modeRef.current as any)[k] = v;
     savePrefs({ [k]: v } as any);
   };
@@ -137,6 +147,21 @@ function SettingsModal({
           />
         </label>
 
+        <label className="set-row set-toggle">
+          <span>AUDIO (M)</span>
+          <input
+            type="checkbox" checked={audioEnabled}
+            onChange={(e) => {
+              const v = e.target.checked;
+              setAudioEnabled(v);
+              update('audioEnabled', v);
+              // Stop the ambient hum immediately if we're turning audio off
+              // mid-session — otherwise it'd keep playing until next reload.
+              modeRef.current.setAudioEnabled?.(v);
+            }}
+          />
+        </label>
+
         <div className="modal-actions">
           <button className="sp-btn" onClick={onClose}>DONE</button>
         </div>
@@ -175,7 +200,11 @@ export default function Jukebox({
     showCategories: boolean; // bottom-rim category labels toggled by 'C'
     zoomTight: number; // tightDist multiplier — Z/X keys + settings slider
     zoomFlat: number;  // telephoto-flatness at zoom=1 — V key + settings slider
+    audioEnabled: boolean; // M key + settings toggle for click chord + ambient hum
     goToActiveCard?: () => void;
+    // Hook initThree exposes so the M-key handler / settings toggle can stop
+    // the hum if it's already playing when audio is turned off mid-session.
+    setAudioEnabled?: (enabled: boolean) => void;
   }>({
     lighting: clampUnit(initialPrefs.current.lighting ?? 1),
     zoom: 0,
@@ -184,6 +213,7 @@ export default function Jukebox({
     showCategories: initialPrefs.current.showCategories ?? true,
     zoomTight: clampZoomTight(initialPrefs.current.zoomTight ?? ZOOM_TIGHT_DEFAULT),
     zoomFlat: clampZoomFlat(initialPrefs.current.zoomFlat ?? 0),
+    audioEnabled: initialPrefs.current.audioEnabled ?? true,
   });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
@@ -284,6 +314,14 @@ export default function Jukebox({
         if (next > 1.0001) next = 0;
         modeRef.current.zoomFlat = clampZoomFlat(next);
         savePrefs({ zoomFlat: modeRef.current.zoomFlat });
+      } else if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        // M = mute/unmute the click chord + ambient hum. The scene-side hook
+        // stops the hum on disable so it doesn't keep playing after a toggle.
+        const next = !modeRef.current.audioEnabled;
+        modeRef.current.audioEnabled = next;
+        savePrefs({ audioEnabled: next });
+        modeRef.current.setAudioEnabled?.(next);
       }
     }
     window.addEventListener('keydown', onKey);
@@ -320,6 +358,7 @@ export default function Jukebox({
         spin: modeRef.current.spin,
         showCategories: modeRef.current.showCategories,
         zoomTight: modeRef.current.zoomTight,
+        audioEnabled: modeRef.current.audioEnabled,
       });
       flushPrefs();
     };
@@ -647,7 +686,7 @@ function initThree(
   tracks: any[],
   nowItem: any,
   onActiveChange: (hasActive: boolean) => void,
-  mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; zoomTight: number; zoomFlat: number; goToActiveCard?: () => void },
+  mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; zoomTight: number; zoomFlat: number; audioEnabled: boolean; goToActiveCard?: () => void; setAudioEnabled?: (enabled: boolean) => void },
   rows: number,
 ) {
   let audioInitialized = false;
@@ -677,6 +716,8 @@ function initThree(
     audioInitialized = false;
   }
   async function playSelectionSound() {
+    // M-key / settings toggle — bail before we'd even spin up the AudioContext.
+    if (!mode.audioEnabled) return;
     // Ensure the AudioContext is live (browsers require a user gesture). On
     // the very first tap initAudio still resolves before we trigger the synth.
     await initAudio();
@@ -684,6 +725,15 @@ function initThree(
     beepSynth.triggerAttackRelease(['C4', 'E4', 'G4'], '8n');
     if (humSynth.state !== 'started') humSynth.start();
   }
+
+  // Exposed to the parent component so the M-key handler and settings toggle
+  // can stop the hum immediately when audio is disabled mid-session (otherwise
+  // it would keep playing until the user reloads or hits a card again).
+  mode.setAudioEnabled = (enabled: boolean) => {
+    if (!enabled && audioInitialized && humSynth?.state === 'started') {
+      try { humSynth.stop(); } catch {}
+    }
+  };
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0x0a0508, 100, 300);
@@ -698,8 +748,13 @@ function initThree(
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, logarithmicDepthBuffer: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  // NeutralToneMapping (Three r163+) preserves color saturation much better
+  // than ACES, which is famous for desaturating bright colors toward white —
+  // exactly the "grayish / dull" look we were getting on saturated cards.
+  // Slightly higher exposure pushes midtones up so the rink-mode neon reads
+  // more punchy.
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.3;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
@@ -751,10 +806,12 @@ function initThree(
   const cameraLight = new THREE.DirectionalLight(0xffffff, 0.0);
   scene.add(cameraLight);
   scene.add(cameraLight.target);
-  const pointLight1 = new THREE.PointLight(0x00ffff, 1.2, 80);
+  // Saturated rink lights — the cyan/magenta that wash the drum in rink mode.
+  // 2.5 (was 1.2) so they actually punch through against the warm fills.
+  const pointLight1 = new THREE.PointLight(0x00ffff, 2.5, 80);
   pointLight1.position.set(-25, 10, 25);
   scene.add(pointLight1);
-  const pointLight2 = new THREE.PointLight(0xff00ff, 1.2, 80);
+  const pointLight2 = new THREE.PointLight(0xff00ff, 2.5, 80);
   pointLight2.position.set(25, -10, -25);
   scene.add(pointLight2);
 
@@ -1852,10 +1909,14 @@ function initThree(
     const L = mode.lighting;
     const ftt = (fit: number, tight: number) => fit + (tight - fit) * z;
 
-    fillWhite.intensity += ((L * 0.35) - fillWhite.intensity) * 0.05;
-    fillAmber.intensity += ((L * 0.45) - fillAmber.intensity) * 0.05;
-    fillPink.intensity += ((L * 0.45) - fillPink.intensity) * 0.05;
-    fillFrontAmber.intensity += ((L * 0.55) - fillFrontAmber.intensity) * 0.05;
+    // Rink-mode fills. White and amber desaturate everything (a saturated
+    // cyan/magenta surface lit by white/amber averages back toward grey), so
+    // we keep them small and let the COLOR fills (pink + the cyan/magenta
+    // point lights) carry the rink palette.
+    fillWhite.intensity += ((L * 0.10) - fillWhite.intensity) * 0.05;
+    fillAmber.intensity += ((L * 0.15) - fillAmber.intensity) * 0.05;
+    fillPink.intensity += ((L * 0.75) - fillPink.intensity) * 0.05;
+    fillFrontAmber.intensity += ((L * 0.25) - fillFrontAmber.intensity) * 0.05;
 
     // Diner endpoint
     const dHemi = ftt(0.45, 0.0);

@@ -56,10 +56,10 @@ Given a `#rrggbb` colour, returns `'#000000'` or `'#ffffff'` — whichever has t
 
 ```ts
 export const palettes: string[][];      // 35 × 4 colours
-export const displayFonts: string[];    // 11 headline faces
-export const scriptFonts: string[];     // 7 script faces
-export const codeFonts: string[];       // 3 monospaced-feel faces (slot code)
-export const infoFonts: string[];       // 6 body / fine-print faces
+export const displayFonts: string[];    // 19 headline faces
+export const scriptFonts: string[];     // 10 script faces
+export const codeFonts: string[];       // 5 monospaced-feel faces (slot code)
+export const infoFonts: string[];       // 9 body / fine-print faces
 ```
 
 These are deliberately `let`-equivalent (exported arrays you can mutate in place). Drop in your own palette or font list before calling `generateCardArt`:
@@ -82,16 +82,18 @@ Each call picks four independent random style indices from the seeded RNG and st
 
 | Layer | Range | What it draws |
 | ----- | ----- | ------------- |
-| **Background** | `0–29` | Solid + variant pattern (split, stripes, checks, rays, half-fill, ellipse, chevron, etc.) |
-| **Decor** | `0–29` | Overlay graphic — giant star, big quiet code, vinyl record, scattered notes, divider lines, corner triangles, etc. |
-| **Border** | `0–8` | Frame around the central typography area. Some borders also place an inset background, which the typo layer respects. |
-| **Layout** | `0–29` | Typography arrangement. 30 distinct compositions for titleA / titleB / artist / code. |
+| **Background** | `0–45` | Solid fills and patterns — split, stripes, checks, rays, chevron, wavy 70s bands, scanlines, etc. |
+| **Decor** | `0–45` | Overlay graphic — giant star, watermark code, vinyl, mic, UFO, mountains, divider lines, etc. |
+| **Border** | `0–14` | Frame around the central typography area. Some borders also place an inset background, which the typo layer respects. |
+| **Layout** | `0–46` | Typography arrangement — 47 distinct compositions for titleA / titleB / artist / code. |
 
 Plus per-card random selections from `palettes`, `displayFonts`, `scriptFonts`, `codeFonts`, `infoFonts`.
 
+Typography is drawn on a separate offscreen canvas and composited onto the card. **Solid flat cards** (simple background + no icons/illustrations + plain border + standard layout) get a pixel-level WCAG contrast pass that flips low-contrast text to black or white. **Patterned or illustrated cards** use hard text shadows instead.
+
 After the four layers, an optional **left-edge stripe** is painted to encode `song.source`, and a **1500-pixel paper-grain noise overlay** is dithered on top to break up the flat fills.
 
-Total combinatorial space: `30 × 30 × 9 × 30 × 35 palettes × (11 × 7 × 3 × 6 fonts) ≈ 3.4 billion` distinct cards, so collisions are vanishingly unlikely.
+Total combinatorial space: `46 × 46 × 15 × 47 × 35 palettes × (19 × 10 × 5 × 9 fonts) ≈ 450 billion` distinct cards, so collisions are vanishingly unlikely.
 
 ## Determinism
 
@@ -108,10 +110,10 @@ The seed is `titleA + artist + code`. **Change any of those and you get a differ
 Layouts reference Google Font families by name (`'Limelight'`, `'Anton'`, `'Bebas Neue'`, etc.). The generator never loads them — you're responsible for loading whatever set you want in your host page, e.g.:
 
 ```html
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Limelight&family=Monoton&family=Pacifico&family=Lobster&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Fascinate&family=Righteous&family=Fjalla+One&family=Rampart+One&family=Rubik+Mono+One&family=Abril+Fatface&family=Bungee&family=Bangers&family=Courier+Prime:wght@400;700&family=Oswald&family=Cinzel&family=Playfair+Display&family=Poiret+One&family=Arimo:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Limelight&family=Monoton&family=Pacifico&family=Lobster&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Fascinate&family=Righteous&family=Fjalla+One&family=Rampart+One&family=Rubik+Mono+One&family=Abril+Fatface&family=Bungee&family=Bangers&family=Erica+One&family=Fugaz+One&family=Ultra&family=Vampiro+One&family=Chicle&family=Russo+One&family=Sigmar+One&family=Fascinate+Inline&family=Damion&family=Cookie&family=Leckerli+One&family=Courier+Prime:wght@400;700&family=Oswald&family=Space+Mono&family=Special+Elite&family=Cinzel&family=Playfair+Display&family=Poiret+One&family=Arimo:wght@400;700&family=Corben&display=swap">
 ```
 
-If a face isn't loaded the canvas falls back to the browser's default (typically serif), which looks wrong. juke.sh's app does `await document.fonts.ready` before calling the generator the first time — recommended for any caller that cares about pixel-perfect output.
+If a face isn't loaded the canvas falls back to the browser's default (typically serif), which looks wrong. juke.sh calls `preloadCardFonts()` before the first render — recommended for any caller that cares about pixel-perfect output on desktop browsers.
 
 ## Three.js integration
 
@@ -140,11 +142,11 @@ Drop a `<canvas>` page in front of it without any framework:
 <!doctype html>
 <meta charset="utf-8">
 <title>card-art preview</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Limelight&family=Monoton&family=Pacifico&family=Lobster&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Fascinate&family=Righteous&family=Fjalla+One&family=Rampart+One&family=Rubik+Mono+One&family=Abril+Fatface&family=Bungee&family=Bangers&family=Courier+Prime:wght@400;700&family=Oswald&family=Cinzel&family=Playfair+Display&family=Poiret+One&family=Arimo:wght@400;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Limelight&family=Monoton&family=Pacifico&family=Lobster&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Fascinate&family=Righteous&family=Fjalla+One&family=Rampart+One&family=Rubik+Mono+One&family=Abril+Fatface&family=Bungee&family=Bangers&family=Erica+One&family=Fugaz+One&family=Ultra&family=Vampiro+One&family=Chicle&family=Russo+One&family=Sigmar+One&family=Fascinate+Inline&family=Damion&family=Cookie&family=Leckerli+One&family=Courier+Prime:wght@400;700&family=Oswald&family=Space+Mono&family=Special+Elite&family=Cinzel&family=Playfair+Display&family=Poiret+One&family=Arimo:wght@400;700&family=Corben&display=swap">
 <body style="background:#111;padding:20px;display:grid;grid-template-columns:repeat(4,256px);gap:8px;">
 <script type="module">
-  import { generateCardArt } from './lib/card-art.js';
-  await document.fonts.ready;
+  import { generateCardArt, preloadCardFonts } from './lib/card-art.js';
+  await preloadCardFonts();
   for (let i = 0; i < 32; i++) {
     const { canvas } = generateCardArt({
       titleA: `Track ${i + 1}`,
@@ -160,4 +162,4 @@ Drop a `<canvas>` page in front of it without any framework:
 ## Reference
 
 - Source: [`lib/card-art.ts`](../lib/card-art.ts)
-- Lineage: adapted from the original `assets/spin7.html` prototype
+- Lineage: adapted from [`assets/spin20.html`](../assets/spin20.html) (was spin7)

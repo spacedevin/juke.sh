@@ -15,8 +15,9 @@ export type Prefs = {
   rows?: number;
   lighting?: number;
   showCategories?: boolean;
-  zoomTight?: number; // tightDist multiplier (0.4..1.2, default 0.95)
-  zoomFlat?: number;  // telephoto-flatness at zoom=1 (0..1, default 0)
+  zoomTight?: number;   // tightDist multiplier (0.4..1.2, default 0.95)
+  zoomFlat?: number;    // telephoto-flatness at zoom=1 (0..1, default 0)
+  audioEnabled?: boolean; // 'M' key + settings toggle for click + hum; default true
 };
 
 export function loadPrefs(): Prefs {

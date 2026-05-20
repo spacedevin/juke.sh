@@ -7,7 +7,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <head>
         <link
-          href="https://fonts.googleapis.com/css2?family=Anton&family=Arimo:wght@400;700&family=Bebas+Neue&family=Courier+Prime:wght@400;700&family=Fjalla+One&family=JetBrains+Mono:wght@400;500;700&family=Oswald:wght@500;700&family=Righteous&family=Pacifico&family=Lobster&family=Fascinate&family=Limelight&family=Poiret+One&family=Yellowtail&family=Satisfy&family=Permanent+Marker&family=Shrikhand&family=Monoton&family=Bungee&family=Rampart+One&family=Cinzel:wght@700&family=Playfair+Display:wght@900&family=Abril+Fatface&family=Rubik+Mono+One&family=Bangers&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Anton&family=Arimo:wght@400;700&family=Bebas+Neue&family=Bangers&family=Bungee&family=Chicle&family=Cinzel:wght@700&family=Cookie&family=Corben&family=Courier+Prime:wght@400;700&family=Damion&family=Erica+One&family=Fascinate&family=Fascinate+Inline&family=Fjalla+One&family=Fugaz+One&family=JetBrains+Mono:wght@400;500;700&family=Leckerli+One&family=Limelight&family=Lobster&family=Monoton&family=Oswald:wght@500;700&family=Pacifico&family=Playfair+Display:wght@900&family=Poiret+One&family=Rampart+One&family=Righteous&family=Rubik+Mono+One&family=Russo+One&family=Satisfy&family=Shrikhand&family=Sigmar+One&family=Space+Mono&family=Special+Elite&family=Ultra&family=Vampiro+One&family=Yellowtail&family=Abril+Fatface&family=Permanent+Marker&display=swap"
           rel="stylesheet"
         />
         <link rel="icon" type="image/x-icon" href="/favicon.ico" />
