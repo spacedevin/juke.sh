@@ -1006,12 +1006,43 @@ function initThree(
   }
   renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 
-  function onResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
+  // Viewport sync. iPadOS in particular doesn't reliably fire `resize` when
+  // the app is backgrounded and reopened — the canvas stays at whatever
+  // dimensions Safari thought the page was during minimization (often half-
+  // width). We re-measure on every visibility/pageshow/orientation event and
+  // defer the actual setSize with rAF so the visualViewport has finished
+  // animating before we read from it.
+  function applySize() {
+    // visualViewport is more accurate than innerWidth during iOS restore
+    // animations (innerWidth can lie for a few frames).
+    const vv = (window as any).visualViewport;
+    const w = Math.round(vv?.width ?? window.innerWidth);
+    const h = Math.round(vv?.height ?? window.innerHeight);
+    if (w <= 0 || h <= 0) return;
+    camera.aspect = w / h;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(w, h, true);
   }
-  window.addEventListener('resize', onResize);
+  let resizeRaf = 0;
+  function scheduleResize() {
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0;
+      applySize();
+      // One more on the next frame — covers cases where the first rAF still
+      // saw an in-flight transition (iPad split-view, Stage Manager).
+      requestAnimationFrame(applySize);
+    });
+  }
+  function onVisibilityChange() {
+    if (document.visibilityState === 'visible') scheduleResize();
+  }
+  window.addEventListener('resize', scheduleResize);
+  window.addEventListener('orientationchange', scheduleResize);
+  window.addEventListener('pageshow', scheduleResize);
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  (window as any).visualViewport?.addEventListener('resize', scheduleResize);
 
   // Poll now-playing. syncNowPlaying handles deck lookup, queue placement,
   // LED positioning, and the jump-to-card camera move. Skipped in debug mode
@@ -1282,7 +1313,12 @@ function initThree(
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
     window.removeEventListener('pointercancel', onPointerUp);
-    window.removeEventListener('resize', onResize);
+    window.removeEventListener('resize', scheduleResize);
+    window.removeEventListener('orientationchange', scheduleResize);
+    window.removeEventListener('pageshow', scheduleResize);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+    (window as any).visualViewport?.removeEventListener('resize', scheduleResize);
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
     renderer.domElement.removeEventListener('wheel', onWheel);
     disposeAudio();
 
