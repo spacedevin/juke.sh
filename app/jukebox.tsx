@@ -709,11 +709,19 @@ function initThree(
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.dampingFactor = 0.05;
+  controls.dampingFactor = 0.1; // only affects auto-orbit / damping internals;
+                                // drag rotation is handled by us directly below
   controls.minPolarAngle = Math.PI / 2;
   controls.maxPolarAngle = Math.PI / 2;
-  controls.enableZoom = false; // we drive zoom ourselves via mode.zoom
-  controls.enablePan = false;  // two-finger drag should never pan the camera
+  controls.enableZoom = false;   // we drive zoom ourselves via mode.zoom
+  controls.enablePan = false;    // two-finger drag should never pan the camera
+  // CRITICAL: we drive horizontal rotation ourselves (see onPointerMove +
+  // momentum coast in animate). OrbitControls' damping pipeline buffered each
+  // move event across many frames AND decayed pending input symmetrically,
+  // which felt like the drum lagged the finger AND lost momentum on release.
+  // Direct camera-azimuth writes make drag pixel-perfect, and we track
+  // pointer velocity for a real fling/coast.
+  controls.enableRotate = false;
 
   const hemiLight = new THREE.HemisphereLight(0xffffff, 0x333333, 0.5);
   scene.add(hemiLight);
@@ -1417,14 +1425,31 @@ function initThree(
   //  • Double-tap on chrome → snap zoom max/min
   const DRAG_THRESHOLD = 6;
   const DOUBLE_TAP_MS = 350;
-  let downX = 0, downY = 0, downAt = 0, lastY = 0, isDragging = false;
+  let downX = 0, downY = 0, downAt = 0, lastX = 0, lastY = 0, isDragging = false;
   let lastTapAt = 0;
+  // Momentum state for the horizontal drag → drum rotation. azVelocity is the
+  // rotational speed (rad/s) the camera should keep coasting at after release.
+  // Sampled from the last pointermove (dx/dt), then decayed each frame in
+  // animate via MOMENTUM_FRICTION until it falls below MOMENTUM_EPS.
+  let azVelocity = 0;
+  let lastMoveTime = 0;
+  const MOMENTUM_FRICTION = 3.0; // nepers/sec — ~95% lost in 1s, smooth ice-rink coast
+  const MOMENTUM_EPS = 0.001;    // rad/s — below this we just stop
   const activePointers = new Map<number, { x: number; y: number }>();
   let pinchBaseDist = 0;
   let pinchBaseZoom = 0;
   let isPinching = false;
   function getXY(event: PointerEvent) {
     return { x: event.clientX, y: event.clientY };
+  }
+  // Apply a delta azimuth (rad) to the camera by rotating its (x, z) around
+  // origin. Preserves both radius and y (polar). Used by drag, momentum, and
+  // auto-orbit so they all share one code path.
+  function applyAzimuthDelta(delta: number) {
+    const az = Math.atan2(camera.position.x, camera.position.z) + delta;
+    const r = Math.hypot(camera.position.x, camera.position.z);
+    camera.position.x = Math.sin(az) * r;
+    camera.position.z = Math.cos(az) * r;
   }
   function onPointerDown(event: any) {
     initAudio();
@@ -1433,8 +1458,12 @@ function initThree(
     container.focus({ preventScroll: true });
     const { x, y } = getXY(event);
     if (event.pointerId !== undefined) activePointers.set(event.pointerId, { x, y });
-    downX = x; downY = y; lastY = y; downAt = Date.now();
+    downX = x; downY = y; lastX = x; lastY = y; downAt = Date.now();
     isDragging = true;
+    // Touching the screen always cancels any in-flight momentum coast — the
+    // user clearly wants to grab the drum, not chase it.
+    azVelocity = 0;
+    lastMoveTime = performance.now();
     if (activePointers.size === 2) {
       const pts = Array.from(activePointers.values());
       pinchBaseDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -1454,13 +1483,40 @@ function initThree(
       const ratio = dist / Math.max(pinchBaseDist, 1);
       // Spread → zoom in; pinch → zoom out. Scale 1× of dist change ≈ full range.
       mode.zoom = clamp(pinchBaseZoom + (ratio - 1), 0, 1);
-      lastY = y; // keep lastY current so lighting doesn't jump after pinch ends
+      lastX = x; lastY = y; // keep lasts current so post-pinch deltas don't jump
       return;
     }
 
+    const now = performance.now();
+    // Clamp dt — sub-millisecond samples blow up the velocity divisor, and a
+    // multi-second gap means the user paused. Either way, treat the sample
+    // as a "single-frame" move at ~60Hz so the velocity stays sane.
+    const dt = Math.min(0.1, Math.max(0.001, (now - lastMoveTime) / 1000));
+    lastMoveTime = now;
+
+    const dx = x - lastX;
     const dy = y - lastY;
+    lastX = x;
     lastY = y;
+
+    // Vertical → lighting blend (unchanged).
     mode.lighting = clamp(mode.lighting - dy * 0.003, 0, 1);
+
+    // Horizontal → direct drum rotation. Same 1:1 derivation as the old
+    // OrbitControls rotateSpeed math: the frontmost card travels Δθ·R world
+    // units, which projects on screen to Δθ·R·viewportH/2 / ((Dcam−R)·tan(vFov/2)).
+    // Solving for Δθ such that the projected card motion equals dx pixels:
+    //   Δθ = (dx / viewportH) · 2·(Dcam − R)·tan(vFov/2) / R
+    // Sign: drag right → camera rotates left in world → drum appears to follow finger.
+    if (dx !== 0) {
+      const dragDist = Math.max(0.1, camera.position.length() - R);
+      const halfVFov = (camera.fov * Math.PI) / 360;
+      const deltaAz = -(dx / window.innerHeight) * (2 * dragDist * Math.tan(halfVFov)) / R;
+      applyAzimuthDelta(deltaAz);
+      // Sample velocity from THIS move event only — captures intent at the
+      // moment the finger lifts, ignoring earlier slow exploration.
+      azVelocity = deltaAz / dt;
+    }
   }
   function onPointerUp(event: any) {
     if (event.pointerId !== undefined) activePointers.delete(event.pointerId);
@@ -1651,16 +1707,28 @@ function initThree(
     // camera around the jukebox — instead of spinning the jukeboxGroup — lets
     // the direction-tracking lights (dirLight, fillFrontAmber) follow along.
     // Time-based delta keeps the speed identical on 60 Hz and 120 Hz displays.
+    // Single dt for the frame — shared by auto-orbit AND the drag-momentum
+    // coast below. clock.getDelta() can only be called once per frame (a
+    // second call returns 0), so we capture it once here.
+    const dt = clock.getDelta();
+
     if (mode.spin) {
-      const dt = clock.getDelta();
       // mode.spin is interpreted as CARDS PER SECOND so the perceived scroll
       // rate stays constant across drum sizes (a "1 card/s" setting moves
       // exactly one card past the camera per second regardless of COLS).
       const radPerSec = (mode.spin * 2 * Math.PI) / COLS;
-      const az = controls.getAzimuthalAngle() + radPerSec * dt;
-      const r = Math.hypot(camera.position.x, camera.position.z);
-      camera.position.x = Math.sin(az) * r;
-      camera.position.z = Math.cos(az) * r;
+      applyAzimuthDelta(radPerSec * dt);
+    }
+
+    // Drag-release momentum. After the user flings the drum, azVelocity is
+    // the last sampled finger speed (rad/s). We integrate it into the camera
+    // each frame and decay exponentially — `friction` controls how quickly
+    // the drum slows to a stop. Dragging again zeros azVelocity (see
+    // onPointerDown) so a touch always stops the coast immediately.
+    if (!isDragging && azVelocity !== 0) {
+      applyAzimuthDelta(azVelocity * dt);
+      azVelocity *= Math.exp(-MOMENTUM_FRICTION * dt);
+      if (Math.abs(azVelocity) < MOMENTUM_EPS) azVelocity = 0;
     }
 
     controls.update();
@@ -1675,23 +1743,9 @@ function initThree(
     const dist = camera.position.length();
     scene.fog.near = dist + 30; scene.fog.far = dist + 250;
 
-    // True 1:1 touch-drag → screen-space card movement.
-    //
-    // A card at the drum's camera-facing surface sits at distance (Dcam − R)
-    // from the camera. When the drum rotates by Δθ, that card moves Δθ·R in
-    // world units, which projects to:
-    //   Δpx_screen = Δθ · R · (viewportH/2) / ((Dcam − R) · tan(vFov/2))
-    //
-    // OrbitControls converts horizontal drag pixels to azimuth as:
-    //   Δθ_per_dragPx = 2π · rotateSpeed / viewportH
-    //
-    // Solve for the rotateSpeed that makes Δpx_screen == drag_px (viewportH
-    // cancels): rotateSpeed = (Dcam − R) · tan(vFov/2) / (R · π).
-    //
-    // Recomputed every frame because Dcam and vFov change with mode.zoom.
-    const dragDist = Math.max(0.1, dist - R);
-    const halfVFov = (camera.fov * Math.PI) / 360;
-    controls.rotateSpeed = (dragDist * Math.tan(halfVFov)) / (R * Math.PI);
+    // The 1:1 drag math used to live here as `controls.rotateSpeed = ...` —
+    // now done inline in onPointerMove via applyAzimuthDelta(), so the value
+    // is sampled at the exact moment of input rather than once-per-frame.
 
     // Continuous zoom: 0 = fit-to-screen (wide FOV, full jukebox in view),
     // 1 = zoom-to-cards (telephoto FOV, height-fit on the cards).
