@@ -544,10 +544,18 @@ function initThree(
   const aluminumMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.9, roughness: 0.4 });
   const whiteBracketMat = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, metalness: 0.2, roughness: 0.6 });
 
-  jukeboxGroup.add(new THREE.Mesh(new THREE.CylinderGeometry(R + 0.02, R + 0.02, HEIGHT_TOTAL - 1, 64), drumMaterial));
+  const drumMesh = new THREE.Mesh(new THREE.CylinderGeometry(R + 0.02, R + 0.02, HEIGHT_TOTAL - 1, 64), drumMaterial);
+  drumMesh.receiveShadow = true;
+  jukeboxGroup.add(drumMesh);
   const rimGeo = new THREE.TorusGeometry(R + 0.2, 0.6, 16, 64);
-  const topRim = new THREE.Mesh(rimGeo, goldMaterial); topRim.rotation.x = Math.PI / 2; topRim.position.y = HEIGHT_TOTAL / 2; jukeboxGroup.add(topRim);
-  const botRim = new THREE.Mesh(rimGeo, goldMaterial); botRim.rotation.x = Math.PI / 2; botRim.position.y = -HEIGHT_TOTAL / 2; jukeboxGroup.add(botRim);
+  const topRim = new THREE.Mesh(rimGeo, goldMaterial);
+  topRim.rotation.x = Math.PI / 2; topRim.position.y = HEIGHT_TOTAL / 2;
+  topRim.castShadow = true;
+  jukeboxGroup.add(topRim);
+  const botRim = new THREE.Mesh(rimGeo, goldMaterial);
+  botRim.rotation.x = Math.PI / 2; botRim.position.y = -HEIGHT_TOTAL / 2;
+  botRim.castShadow = true;
+  jukeboxGroup.add(botRim);
   const neonGeo = new THREE.TorusGeometry(R + 1.2, 0.15, 16, 64);
   const neonTop = new THREE.Mesh(neonGeo, new THREE.MeshStandardMaterial({ color: 0x00ffff, emissive: 0x00ffff, emissiveIntensity: 2.0 }));
   neonTop.rotation.x = Math.PI / 2; neonTop.position.y = HEIGHT_TOTAL / 2 + 0.5; jukeboxGroup.add(neonTop);
@@ -559,11 +567,15 @@ function initThree(
     const theta = i * COL_ANGLE;
     const bg = new THREE.Group();
     if (i % 2 === 0) {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, HEIGHT_TOTAL - 2, 0.4), tealMaterial); base.castShadow = true; bg.add(base);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, HEIGHT_TOTAL - 2, 0.4), tealMaterial);
+      base.castShadow = true; base.receiveShadow = true;
+      bg.add(base);
       const pL = new THREE.Mesh(new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04), chromeMat); pL.position.set(-0.15, 0, 0.2); bg.add(pL);
       const pR = new THREE.Mesh(new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04), chromeMat); pR.position.set(0.15, 0, 0.2); bg.add(pR);
     } else {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, HEIGHT_TOTAL - 2, 0.15), aluminumMat); base.castShadow = true; bg.add(base);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, HEIGHT_TOTAL - 2, 0.15), aluminumMat);
+      base.castShadow = true; base.receiveShadow = true;
+      bg.add(base);
       const spine = new THREE.Mesh(new THREE.BoxGeometry(0.1, HEIGHT_TOTAL - 2, 0.08), chromeMat); spine.position.set(0, 0, 0.1); bg.add(spine);
     }
     bg.position.set(Math.sin(theta) * (R + 0.12), 0, Math.cos(theta) * (R + 0.12));
