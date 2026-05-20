@@ -1331,6 +1331,9 @@ function initThree(
     const half = Math.ceil(words.length / 2);
     const titleA = words.length > 1 ? words.slice(0, half).join(' ') : (t.name || '');
     const titleB = words.length > 1 ? words.slice(half).join(' ') : (t.album || t.name || '');
+    // Cell ID: spreadsheet-style column letter + row number (A1, B1, C1, …,
+    // A2, B2, C2, …). Column letter wraps after Z so a 32-column drum is
+    // addressable: col 26 is 'A' again, col 27 is 'B', etc.
     const code = letters[c % letters.length] + (r + 1);
     const song = { ...t, titleA, titleB, code };
     const { canvas: art, accent, bg, alt } = generateCardArt(song);
@@ -1530,6 +1533,13 @@ function initThree(
     playSelectionSound();
     activeCard = card;
     onActiveChange(true);
+    // If we're sitting at fit-zoom and the user just picked a card to play,
+    // snap in on it. Already-zoomed-in stays put — the user clearly tapped
+    // the one they wanted and doesn't need a camera move.
+    if (mode.zoom < ZOOM_AUTO_THRESHOLD) {
+      mode.zoom = 1;
+      mode.goToActiveCard?.();
+    }
     // Skip the API call for fake debug URIs.
     if (!mode.debug) {
       try { await play(card.userData.song.uri); } catch {}
@@ -1748,21 +1758,25 @@ function initThree(
   };
   controls.addEventListener('start', () => { groupRotTarget = null; });
 
-  // Startup choreography:
-  //   t+0:    illuminate the now-playing track + jump-to-card
-  //   t+4s:   ramp zoom up to 1 (tight on the playing card); the per-frame
-  //           camera lerp animates the actual zoom-in smoothly.
+  // Below this zoom level the deck reads as "zoomed out" — small enough that
+  // the user is in browse mode and benefits from a snap-in when they pick
+  // something to play or land on a track that's already playing.
+  const ZOOM_AUTO_THRESHOLD = 0.5;
+  // Startup: if we arrived with a current track AND the deck is sitting at
+  // fit-zoom, snap to it. Otherwise leave the camera wherever the user left
+  // it (e.g. they zoomed out manually before the scene rebuilt).
+  // (Previously: a 4-second setTimeout always forced zoom=1, even when the
+  // user had deliberately backed out to see the whole drum.)
   let isSceneReady = false;
-  const introTimers: ReturnType<typeof setTimeout>[] = [];
   function onSceneReady() {
     if (nowItem) {
       activeCard = null;
       syncNowPlaying(nowItem);
     }
-    introTimers.push(setTimeout(() => {
+    if (activeCard && mode.zoom < ZOOM_AUTO_THRESHOLD) {
       mode.zoom = 1;
-      if (activeCard) mode.goToActiveCard?.();
-    }, 4000));
+      mode.goToActiveCard?.();
+    }
   }
 
   const clock = new THREE.Clock();
@@ -2072,7 +2086,6 @@ function initThree(
   return () => {
     cancelAnimationFrame(raf);
     if (pollInterval !== null) clearInterval(pollInterval);
-    introTimers.forEach(clearTimeout);
     window.removeEventListener('pointerdown', onPointerDown);
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
