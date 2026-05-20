@@ -163,6 +163,24 @@ All shortcuts work on every route (`/box` and `/dev`). Suppressed while you're f
 | **→ Right arrow** | Nudge the auto-orbit speed rightward (−0.05 rad/sec). Press repeatedly to accelerate, or use the opposite key to slow / reverse. |
 | **↑ Up arrow** | Add one row to the jukebox (more cards per column). Range 4–20. Triggers a quick scene rebuild. |
 | **↓ Down arrow** | Remove one row from the jukebox. |
+| **Z** | Tighten the max-zoom-in level (crops more chrome off the top + bottom rims). |
+| **X** | Loosen the max-zoom-in level (reveals more rim chrome). |
+| **V** | Cycle the max-zoom telephoto flatness (0 → 20% → 40% → 60% → 80% → 100% → 0). Higher = longer lens, cards look flatter / nearly orthographic when zoomed in. |
+| **Esc** | Close the settings modal. |
+
+### Settings menu
+
+Tap the screen **5 times in quick succession** (about 800ms total) anywhere outside a card to pop a settings modal. Useful on phones / iPads where you don't have a keyboard. Sliders for:
+
+- **Rotation speed** — same as the ←/→ arrows, but continuous. Measured in *cards per second*, so a setting of `2` means roughly two cards scroll past the camera every second regardless of how big the jukebox is.
+- **Rows per column** — same as the ↑/↓ arrows.
+- **Zoom-in tightness** — same as the Z/X keys.
+- **Zoom-in flatness** — same as the V key. 0% = normal telephoto, 100% = ultra-flat lens (looks nearly orthographic).
+- **Category labels** — same as the C key.
+
+Changes apply live and persist across reloads. ESC or tap outside to close.
+
+All settings (rotation, rows, lighting drag, category toggle, zoom-tightness) are saved to `localStorage` and restored on next visit.
 
 ---
 

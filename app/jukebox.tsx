@@ -23,7 +23,126 @@ const MIN_ROWS = 4;
 const MAX_ROWS = 20;
 const clampRows = (n: number) => Math.max(MIN_ROWS, Math.min(MAX_ROWS, n | 0));
 const clampUnit = (n: number) => Math.max(0, Math.min(1, n));
-const clampSpin = (n: number) => Math.max(-1.5, Math.min(1.5, n));
+// Spin is denominated in CARDS PER SECOND — perceived scroll rate is
+// constant across drum sizes (a 1000-card drum and a 100-card drum both move
+// one card past the camera per second at spin=1).
+const SPIN_MAX = 10;       // ±10 cards/s
+const SPIN_STEP = 0.25;    // ←/→ key nudge
+const clampSpin = (n: number) => Math.max(-SPIN_MAX, Math.min(SPIN_MAX, n));
+// Tight-zoom multiplier. Lower = camera pulls closer past height-fit,
+// effectively cropping the gold rim chrome off the top/bottom. Higher =
+// reveals more chrome / breathing room.
+const ZOOM_TIGHT_MIN = 0.4;
+const ZOOM_TIGHT_MAX = 1.2;
+const ZOOM_TIGHT_DEFAULT = 0.95;
+const clampZoomTight = (n: number) => Math.max(ZOOM_TIGHT_MIN, Math.min(ZOOM_TIGHT_MAX, n));
+// Telephoto-flatness applied at zoom=1: 0 = normal 12° tight, 1 = ultra-tele
+// ~2° (near-orthographic, perspective looks completely flat). Camera distance
+// auto-compensates so cards stay the same size on screen — only the depth /
+// foreshortening collapses.
+const TIGHT_FOV_NORMAL = 12;
+const TIGHT_FOV_FLAT = 2;
+const ZOOM_FLAT_STEP = 0.2;
+const clampZoomFlat = (n: number) => Math.max(0, Math.min(1, n));
+
+function SettingsModal({
+  modeRef,
+  rows,
+  onChangeRows,
+  onClose,
+}: {
+  modeRef: { current: { spin: number; showCategories: boolean; zoomTight: number; zoomFlat: number } };
+  rows: number;
+  onChangeRows: (n: number) => void;
+  onClose: () => void;
+}) {
+  // Mirror modeRef into local state so the sliders re-render. Writes go
+  // straight back to modeRef + savePrefs so the live scene updates instantly.
+  const [spin, setSpin] = useState(modeRef.current.spin);
+  const [showCategories, setShowCategories] = useState(modeRef.current.showCategories);
+  const [zoomTight, setZoomTight] = useState(modeRef.current.zoomTight);
+  const [zoomFlat, setZoomFlat] = useState(modeRef.current.zoomFlat);
+
+  // ESC to close
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose(); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const update = <K extends 'spin' | 'showCategories' | 'zoomTight' | 'zoomFlat'>(k: K, v: any) => {
+    (modeRef.current as any)[k] = v;
+    savePrefs({ [k]: v } as any);
+  };
+
+  return (
+    <div className="center-screen settings-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">SETTINGS</div>
+        <div className="modal-sub">5-tap anywhere to reopen · ESC to close</div>
+
+        <label className="set-row">
+          <div className="set-label">
+            <span>ROTATION SPEED</span>
+            <span className="set-val">{spin.toFixed(2)} cards/s</span>
+          </div>
+          <input
+            type="range" min={-SPIN_MAX} max={SPIN_MAX} step={SPIN_STEP} value={spin}
+            onChange={(e) => { const v = +e.target.value; setSpin(v); update('spin', v); }}
+          />
+          <button className="set-zero" onClick={() => { setSpin(0); update('spin', 0); }} title="Stop">⏹</button>
+        </label>
+
+        <label className="set-row">
+          <div className="set-label">
+            <span>ROWS PER COLUMN</span>
+            <span className="set-val">{rows}</span>
+          </div>
+          <input
+            type="range" min={MIN_ROWS} max={MAX_ROWS} step={1} value={rows}
+            onChange={(e) => onChangeRows(clampRows(+e.target.value))}
+          />
+        </label>
+
+        <label className="set-row">
+          <div className="set-label">
+            <span>ZOOM-IN TIGHTNESS</span>
+            <span className="set-val">{zoomTight.toFixed(2)}×</span>
+          </div>
+          <input
+            type="range" min={ZOOM_TIGHT_MIN} max={ZOOM_TIGHT_MAX} step={0.05} value={zoomTight}
+            onChange={(e) => { const v = +e.target.value; setZoomTight(v); update('zoomTight', v); }}
+          />
+        </label>
+        <div className="set-hint">Lower = crops chrome / cards fill more of the screen. Z / X keys nudge this too.</div>
+
+        <label className="set-row">
+          <div className="set-label">
+            <span>ZOOM-IN FLATNESS</span>
+            <span className="set-val">{Math.round(zoomFlat * 100)}%</span>
+          </div>
+          <input
+            type="range" min={0} max={1} step={0.05} value={zoomFlat}
+            onChange={(e) => { const v = +e.target.value; setZoomFlat(v); update('zoomFlat', v); }}
+          />
+        </label>
+        <div className="set-hint">Higher = longer telephoto lens, cards look flatter / less 3D when zoomed in. V key cycles too.</div>
+
+        <label className="set-row set-toggle">
+          <span>CATEGORY LABELS</span>
+          <input
+            type="checkbox" checked={showCategories}
+            onChange={(e) => { const v = e.target.checked; setShowCategories(v); update('showCategories', v); }}
+          />
+        </label>
+
+        <div className="modal-actions">
+          <button className="sp-btn" onClick={onClose}>DONE</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function Jukebox({
   debug = false,
@@ -44,6 +163,7 @@ export default function Jukebox({
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const [cachedIds, setCachedIds] = useState<Set<string>>(new Set());
   const [showHints, setShowHints] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
   const modeRef = useRef<{
     lighting: number; // 0 = classic diner, 1 = roller rink
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
@@ -52,6 +172,8 @@ export default function Jukebox({
                       // Arrow keys nudge this up/down; defaults to 0.
     debug: boolean;   // procedural tracks, no Spotify API
     showCategories: boolean; // bottom-rim category labels toggled by 'C'
+    zoomTight: number; // tightDist multiplier — Z/X keys + settings slider
+    zoomFlat: number;  // telephoto-flatness at zoom=1 — V key + settings slider
     goToActiveCard?: () => void;
   }>({
     lighting: clampUnit(initialPrefs.current.lighting ?? 1),
@@ -59,6 +181,8 @@ export default function Jukebox({
     spin: clampSpin(initialPrefs.current.spin ?? 0),
     debug,
     showCategories: initialPrefs.current.showCategories ?? true,
+    zoomTight: clampZoomTight(initialPrefs.current.zoomTight ?? ZOOM_TIGHT_DEFAULT),
+    zoomFlat: clampZoomFlat(initialPrefs.current.zoomFlat ?? 0),
   });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
@@ -129,11 +253,11 @@ export default function Jukebox({
         savePrefs({ showCategories: modeRef.current.showCategories });
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        modeRef.current.spin = Math.min(1.5, modeRef.current.spin + 0.05);
+        modeRef.current.spin = clampSpin(modeRef.current.spin + SPIN_STEP);
         savePrefs({ spin: modeRef.current.spin });
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
-        modeRef.current.spin = Math.max(-1.5, modeRef.current.spin - 0.05);
+        modeRef.current.spin = clampSpin(modeRef.current.spin - SPIN_STEP);
         savePrefs({ spin: modeRef.current.spin });
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
@@ -141,30 +265,69 @@ export default function Jukebox({
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         setRows(r => { const n = Math.max(MIN_ROWS, r - 1); savePrefs({ rows: n }); return n; });
+      } else if (e.key === 'z' || e.key === 'Z') {
+        e.preventDefault();
+        // Z = tighter (crop more chrome)
+        modeRef.current.zoomTight = clampZoomTight(modeRef.current.zoomTight - 0.05);
+        savePrefs({ zoomTight: modeRef.current.zoomTight });
+      } else if (e.key === 'x' || e.key === 'X') {
+        e.preventDefault();
+        // X = looser (reveal more chrome)
+        modeRef.current.zoomTight = clampZoomTight(modeRef.current.zoomTight + 0.05);
+        savePrefs({ zoomTight: modeRef.current.zoomTight });
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        // V = step telephoto flatness up; wraps to 0 after 1.0 so a single
+        // key cycles through the full range.
+        let next = modeRef.current.zoomFlat + ZOOM_FLAT_STEP;
+        if (next > 1.0001) next = 0;
+        modeRef.current.zoomFlat = clampZoomFlat(next);
+        savePrefs({ zoomFlat: modeRef.current.zoomFlat });
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Persist the lighting blend on pointer release (initThree mutates
-  // modeRef.lighting continuously during a vertical drag; saving on every
-  // pointermove would hammer localStorage).
+  // Pointer-release housekeeping:
+  //  • persist the lighting blend (initThree mutates modeRef.lighting
+  //    continuously during a vertical drag, debouncing saves at the lib)
+  //  • count 5 fast taps to pop the Settings modal — a mobile-friendly
+  //    alternative to keyboard shortcuts.
+  const TAP_BURST_MS = 800;
+  const TAP_MOVE_MAX = 8;
+  const TAP_DURATION_MAX = 250;
+  const tapTimes = useRef<number[]>([]);
+  let pdAt = 0, pdX = 0, pdY = 0;
   useEffect(() => {
-    const onUp = () => savePrefs({ lighting: modeRef.current.lighting });
+    const onDown = (e: PointerEvent) => { pdAt = Date.now(); pdX = e.clientX; pdY = e.clientY; };
+    const onUp = (e: PointerEvent) => {
+      savePrefs({ lighting: modeRef.current.lighting });
+      const dur = Date.now() - pdAt;
+      const dist = Math.hypot(e.clientX - pdX, e.clientY - pdY);
+      if (dur > TAP_DURATION_MAX || dist > TAP_MOVE_MAX) return;
+      const now = Date.now();
+      tapTimes.current = [...tapTimes.current, now].filter(t => now - t < TAP_BURST_MS).slice(-5);
+      if (tapTimes.current.length >= 5) {
+        tapTimes.current = [];
+        setShowSettings(true);
+      }
+    };
     const onHide = () => {
-      // Flush any debounced writes before the tab is backgrounded / closed.
       savePrefs({
         lighting: modeRef.current.lighting,
         spin: modeRef.current.spin,
         showCategories: modeRef.current.showCategories,
+        zoomTight: modeRef.current.zoomTight,
       });
       flushPrefs();
     };
+    window.addEventListener('pointerdown', onDown);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     document.addEventListener('visibilitychange', onHide);
     return () => {
+      window.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       document.removeEventListener('visibilitychange', onHide);
@@ -260,8 +423,9 @@ export default function Jukebox({
               <div className="instruction-badge">TAP TO PLAY/PAUSE</div>
               <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM • C FOR CATS</div>
               <div className="instruction-subtitle">
-                ← → ROTATION SPEED &nbsp;•&nbsp; ↑ ↓ ROW COUNT
+                ← → ROTATION &nbsp;•&nbsp; ↑ ↓ ROWS &nbsp;•&nbsp; Z X TIGHTNESS &nbsp;•&nbsp; V FLATNESS
               </div>
+              <div className="instruction-subtitle">5-TAP FOR SETTINGS</div>
             </div>
           )}
         </div>
@@ -335,6 +499,15 @@ export default function Jukebox({
             </div>
           </div>
         </div>
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          modeRef={modeRef}
+          rows={rows}
+          onChangeRows={(n) => { setRows(n); savePrefs({ rows: n }); }}
+          onClose={() => setShowSettings(false)}
+        />
       )}
 
       <style jsx global>{`
@@ -417,6 +590,51 @@ export default function Jukebox({
         .pl-name { color: #fff; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .pl-id { color: #666; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
         .modal-actions { display: flex; justify-content: center; margin-top: 4px; }
+
+        /* Settings modal */
+        .settings-backdrop { background: rgba(0,0,0,0.55); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+        .set-row { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+        .set-row.set-toggle { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }
+        .set-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; color: #ccc; letter-spacing: 1px; }
+        .set-val { color: #00ff88; font-variant-numeric: tabular-nums; }
+        .set-row input[type="range"] {
+          -webkit-appearance: none; appearance: none;
+          width: 100%; height: 4px; background: rgba(0,255,136,0.18); border-radius: 999px; outline: none;
+        }
+        .set-row input[type="range"]::-webkit-slider-thumb {
+          -webkit-appearance: none; appearance: none;
+          width: 20px; height: 20px; border-radius: 50%;
+          background: #00ff88; cursor: pointer; border: none;
+          box-shadow: 0 0 8px rgba(0,255,136,0.5);
+        }
+        .set-row input[type="range"]::-moz-range-thumb {
+          width: 20px; height: 20px; border-radius: 50%;
+          background: #00ff88; cursor: pointer; border: none;
+          box-shadow: 0 0 8px rgba(0,255,136,0.5);
+        }
+        .set-zero {
+          align-self: flex-end; margin-top: -4px;
+          background: transparent; color: #00ff88;
+          border: 1px solid rgba(0,255,136,0.45); border-radius: 999px;
+          font-family: inherit; font-size: 12px;
+          width: 32px; height: 28px; cursor: pointer;
+        }
+        .set-zero:hover { background: rgba(0,255,136,0.12); }
+        .set-row.set-toggle input[type="checkbox"] {
+          -webkit-appearance: none; appearance: none;
+          width: 46px; height: 26px; border-radius: 999px;
+          background: rgba(0,255,136,0.18);
+          border: 1px solid rgba(0,255,136,0.4);
+          position: relative; cursor: pointer;
+        }
+        .set-row.set-toggle input[type="checkbox"]::after {
+          content: ''; position: absolute; top: 2px; left: 2px;
+          width: 20px; height: 20px; border-radius: 50%;
+          background: #00ff88; transition: transform 0.15s;
+          box-shadow: 0 0 8px rgba(0,255,136,0.5);
+        }
+        .set-row.set-toggle input[type="checkbox"]:checked::after { transform: translateX(20px); }
+        .set-hint { color: #888; font-size: 10px; letter-spacing: 0.5px; margin: -6px 0 0 0; text-align: left; line-height: 1.5; }
       `}</style>
     </>
   );
@@ -427,7 +645,7 @@ function initThree(
   tracks: any[],
   nowItem: any,
   onActiveChange: (hasActive: boolean) => void,
-  mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; goToActiveCard?: () => void },
+  mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; zoomTight: number; zoomFlat: number; goToActiveCard?: () => void },
   rows: number,
 ) {
   let audioInitialized = false;
@@ -545,9 +763,10 @@ function initThree(
   const MIN_EMPTY = 10;
   let COLS = Math.max(8, Math.ceil((tracks.length + MIN_EMPTY) / ROWS));
   if (COLS % 2 === 1) COLS += 1;
-  // Larger drums shouldn't whip past — scale rotate speed inversely with COLS
-  // so each drag covers a similar number of cards regardless of jukebox size.
-  controls.rotateSpeed = Math.max(0.15, Math.min(1.0, 24 / COLS));
+  // rotateSpeed is recomputed per-frame in animate() — see updateRotateSpeed —
+  // because true 1:1 drag depends on the camera's current distance + FOV,
+  // both of which change with `mode.zoom`. A static value can't be both
+  // comfortable at fit-zoom AND not whip-past at telephoto zoom.
   const totalCells = COLS * ROWS;
   const emptyCount = totalCells - tracks.length;
   const displayTracks: (any | null)[] = [...tracks, ...Array(emptyCount).fill(null)];
@@ -1165,7 +1384,11 @@ function initThree(
     // Time-based delta keeps the speed identical on 60 Hz and 120 Hz displays.
     if (mode.spin) {
       const dt = clock.getDelta();
-      const az = controls.getAzimuthalAngle() + mode.spin * dt;
+      // mode.spin is interpreted as CARDS PER SECOND so the perceived scroll
+      // rate stays constant across drum sizes (a "1 card/s" setting moves
+      // exactly one card past the camera per second regardless of COLS).
+      const radPerSec = (mode.spin * 2 * Math.PI) / COLS;
+      const az = controls.getAzimuthalAngle() + radPerSec * dt;
       const r = Math.hypot(camera.position.x, camera.position.z);
       camera.position.x = Math.sin(az) * r;
       camera.position.z = Math.cos(az) * r;
@@ -1177,12 +1400,34 @@ function initThree(
     const dist = camera.position.length();
     scene.fog.near = dist + 30; scene.fog.far = dist + 250;
 
+    // True 1:1 touch-drag → screen-space card movement.
+    //
+    // A card at the drum's camera-facing surface sits at distance (Dcam − R)
+    // from the camera. When the drum rotates by Δθ, that card moves Δθ·R in
+    // world units, which projects to:
+    //   Δpx_screen = Δθ · R · (viewportH/2) / ((Dcam − R) · tan(vFov/2))
+    //
+    // OrbitControls converts horizontal drag pixels to azimuth as:
+    //   Δθ_per_dragPx = 2π · rotateSpeed / viewportH
+    //
+    // Solve for the rotateSpeed that makes Δpx_screen == drag_px (viewportH
+    // cancels): rotateSpeed = (Dcam − R) · tan(vFov/2) / (R · π).
+    //
+    // Recomputed every frame because Dcam and vFov change with mode.zoom.
+    const dragDist = Math.max(0.1, dist - R);
+    const halfVFov = (camera.fov * Math.PI) / 360;
+    controls.rotateSpeed = (dragDist * Math.tan(halfVFov)) / (R * Math.PI);
+
     // Continuous zoom: 0 = fit-to-screen (wide FOV, full jukebox in view),
     // 1 = zoom-to-cards (telephoto FOV, height-fit on the cards).
     // Camera FOV + position smoothly lerp toward targets derived from mode.zoom.
     {
       const z = mode.zoom;
-      const targetFOV = 45 + (12 - 45) * z;
+      // FOV at max zoom is interpolated from the normal 12° telephoto down
+      // toward 2° as zoomFlat→1, giving a flat, near-orthographic perspective.
+      // Camera distance compensates via hDist below so card size stays similar.
+      const tightFOV = TIGHT_FOV_NORMAL + (TIGHT_FOV_FLAT - TIGHT_FOV_NORMAL) * mode.zoomFlat;
+      const targetFOV = 45 + (tightFOV - 45) * z;
       camera.fov += (targetFOV - camera.fov) * 0.12;
       camera.updateProjectionMatrix();
       const vFOV = (camera.fov * Math.PI) / 180;
@@ -1191,7 +1436,7 @@ function initThree(
       const fitDist = Math.max(hDist, wDist);
       // At max zoom, pull in past the strict height-fit so cards punch larger
       // in frame (FOV compression alone doesn't change apparent card size).
-      const tightDist = hDist * 0.95;
+      const tightDist = hDist * mode.zoomTight;
       const targetDist = fitDist + (tightDist - fitDist) * z;
       const azi = controls.getAzimuthalAngle();
       const tx = Math.sin(azi) * (R + targetDist);
