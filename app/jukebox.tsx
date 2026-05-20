@@ -206,7 +206,10 @@ export default function Jukebox({
     // the hum if it's already playing when audio is turned off mid-session.
     setAudioEnabled?: (enabled: boolean) => void;
   }>({
-    lighting: clampUnit(initialPrefs.current.lighting ?? 1),
+    // Default to a 50/50 blend of diner + rink — both ends are now exaggerated
+    // enough that pure diner or pure rink reads as a deliberate mood, and the
+    // midpoint is the "best of both" baseline.
+    lighting: clampUnit(initialPrefs.current.lighting ?? 0.5),
     zoom: 0,
     spin: clampSpin(initialPrefs.current.spin ?? 0),
     debug,
@@ -1909,22 +1912,35 @@ function initThree(
     const L = mode.lighting;
     const ftt = (fit: number, tight: number) => fit + (tight - fit) * z;
 
-    // Rink-mode fills. White and amber desaturate everything (a saturated
-    // cyan/magenta surface lit by white/amber averages back toward grey), so
-    // we keep them small and let the COLOR fills (pink + the cyan/magenta
-    // point lights) carry the rink palette.
-    fillWhite.intensity += ((L * 0.10) - fillWhite.intensity) * 0.05;
+    // Rink-mode fills, exaggerated. The saturated pink fill carries the rink
+    // mood; we keep the desaturating whites/ambers small so the cyan/magenta
+    // point lights actually punch through.
+    fillWhite.intensity += ((L * 0.15) - fillWhite.intensity) * 0.05;
     fillAmber.intensity += ((L * 0.15) - fillAmber.intensity) * 0.05;
-    fillPink.intensity += ((L * 0.75) - fillPink.intensity) * 0.05;
-    fillFrontAmber.intensity += ((L * 0.25) - fillFrontAmber.intensity) * 0.05;
+    fillPink.intensity += ((L * 1.4) - fillPink.intensity) * 0.05;
+    fillFrontAmber.intensity += ((L * 0.30) - fillFrontAmber.intensity) * 0.05;
 
-    // Diner endpoint
-    const dHemi = ftt(0.45, 0.0);
-    const dDir = ftt(0.75, 0.0);
-    const dAmb = ftt(0.0, 0.55);
-    const dCam = ftt(0.0, 0.2);
+    // Point + neon emissive intensity is now L-dependent so the rink palette
+    // actually CRESCENDOS as you drag toward rink, instead of being a constant
+    // background drone. At L=0 the cyan/magenta are barely there (warm-tinted
+    // by _tColor lerp anyway); at L=1 they're dramatic neon.
+    const neonTarget = 0.5 + L * 5.0;          // 0.5 → 5.5 (was constant 2.5)
+    const neonEmissive = 1.0 + L * 3.5;        // 1.0 → 4.5 (was constant 2.0)
+    pointLight1.intensity += (neonTarget - pointLight1.intensity) * 0.05;
+    pointLight2.intensity += (neonTarget - pointLight2.intensity) * 0.05;
+    neonTop.material.emissiveIntensity = neonEmissive;
+    neonBot.material.emissiveIntensity = neonEmissive;
 
-    // Rink endpoint — moody, optionally driven by the active card's palette
+    // Diner endpoint — bumped ~2x so pure-diner (L=0) reads as a vibrant warm
+    // 50s diner instead of "regular indoor scene with bulbs".
+    const dHemi = ftt(0.95, 0.0);
+    const dDir = ftt(1.5, 0.0);
+    const dAmb = ftt(0.0, 1.1);
+    const dCam = ftt(0.0, 0.4);
+
+    // Rink endpoint — moody. We pull ambient/hemi/dir LOWER than before so the
+    // contrast between bright neon and dark base reads as proper rink moodiness
+    // (was "neon plus a fair amount of general fill" — too washed-out).
     let rHemi: number, rDir: number;
     if (activeCard) {
       // Pre-parsed Color objects (set once in buildCard) — copy() is a 3-float
@@ -1935,13 +1951,13 @@ function initThree(
       const cycle = (Math.sin(t * 1.5) + 1) / 2;
       _rColor1.lerpColors(_scratchA, _scratchB, cycle);
       _rColor2.lerpColors(_scratchB, _scratchC, 1 - cycle);
-      rHemi = ftt(0.1, 0.0);
-      rDir = ftt(0.1, 0.0);
+      rHemi = ftt(0.05, 0.0);
+      rDir = ftt(0.05, 0.0);
     } else {
-      _rColor1.setHSL((t * 0.1) % 1, 0.9, 0.6);
-      _rColor2.setHSL(((t * 0.1) + 0.5) % 1, 0.9, 0.6);
-      rHemi = ftt(0.4, 0.0);
-      rDir = ftt(0.6, 0.0);
+      _rColor1.setHSL((t * 0.1) % 1, 0.95, 0.55);
+      _rColor2.setHSL(((t * 0.1) + 0.5) % 1, 0.95, 0.55);
+      rHemi = ftt(0.15, 0.0);
+      rDir = ftt(0.25, 0.0);
     }
 
     const targetHemi = dHemi * (1 - L) + rHemi * L;
