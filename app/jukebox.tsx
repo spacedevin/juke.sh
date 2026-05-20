@@ -33,9 +33,7 @@ export default function Jukebox({
   const [userPlaylists, setUserPlaylists] = useState<UserPlaylist[]>([]);
   const [pickedIds, setPickedIds] = useState<Set<string>>(new Set());
   const [cachedIds, setCachedIds] = useState<Set<string>>(new Set());
-  const [npText, setNpText] = useState('Loading…');
-  const [npIdle, setNpIdle] = useState(true);
-  const setBanner = (text: string, idle = false) => { setNpText(text); setNpIdle(idle); };
+  const [showHints, setShowHints] = useState(true);
   const modeRef = useRef<{
     lighting: number; // 0 = classic diner, 1 = roller rink
     zoom: number;     // 0 = fit-to-screen, 1 = zoom-to-cards
@@ -84,11 +82,19 @@ export default function Jukebox({
     const data = tracksDataRef.current;
     if (!data || !containerRef.current) return;
     cleanupRef.current = initThree(
-      containerRef.current, data.tracks, data.nowItem, setBanner, modeRef.current, rows,
+      containerRef.current,
+      data.tracks,
+      data.nowItem,
+      (hasActive) => {
+        if (mountedRef.current) setShowHints(!hasActive);
+      },
+      modeRef.current,
+      rows,
     );
     return () => {
       cleanupRef.current?.();
       cleanupRef.current = undefined;
+      if (mountedRef.current) setShowHints(true);
     };
   }, [phase, rows]);
 
@@ -201,7 +207,7 @@ export default function Jukebox({
       />
       {phase === 'ready' && (
         <div id="ui-overlay">
-          {npIdle && (
+          {showHints && (
             <div>
               <div className="instruction-badge">TAP TO PLAY/PAUSE</div>
               <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM • C FOR CATS</div>
@@ -351,7 +357,7 @@ function initThree(
   container: HTMLDivElement,
   tracks: any[],
   nowItem: any,
-  setBanner: (text: string, idle?: boolean) => void,
+  onActiveChange: (hasActive: boolean) => void,
   mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; goToActiveCard?: () => void },
   rows: number,
 ) {
@@ -917,9 +923,6 @@ function initThree(
     return card;
   }
 
-  setBanner('Select a Track', true); // overridden below if a track is playing
-
-
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
 
@@ -938,8 +941,7 @@ function initThree(
   }
 
   // Bring the playing track to life. Finds (or places via the queue) the card
-  // for the given Spotify item, sets it as active, positions the edge LEDs,
-  // updates the banner, and jumps the drum so it's front-and-center.
+  // for the given Spotify item, sets it as active, and jumps the drum front-and-center.
   function syncNowPlaying(item: any) {
     if (!item?.uri) return;
     let match = cardByUri.get(item.uri);
@@ -954,19 +956,19 @@ function initThree(
     }
     if (!match || match === activeCard) return;
     activeCard = match;
-    setBanner(`♫ ${item.name} — ${(item.artists || []).map((a: any) => a.name).join(', ')} ♫`, false);
+    onActiveChange(true);
     mode.goToActiveCard?.();
   }
 
   async function selectCard(card: any) {
     if (activeCard === card) {
       activeCard = null;
-      setBanner('Select a Track', true);
+      onActiveChange(false);
       return;
     }
     playSelectionSound();
     activeCard = card;
-    setBanner(`♫ ${card.userData.song.name} — ${card.userData.song.artist} ♫`, false);
+    onActiveChange(true);
     // Skip the API call for fake debug URIs.
     if (!mode.debug) {
       try { await play(card.userData.song.uri); } catch {}
