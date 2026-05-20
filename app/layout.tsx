@@ -92,7 +92,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             display: flex;
             justify-content: center;
             pointer-events: none;
-            text-shadow: 0 0 8px rgba(0,0,0,0.8);
             padding: 0 12px;
           }
           .site-footer a {
@@ -107,6 +106,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             padding: 4px 10px;
             border-radius: 999px;
             transition: color 0.15s, background-color 0.15s;
+            text-shadow: 0 0 8px rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.6);
+
           }
           .site-footer a:hover {
             color: #00ff88;

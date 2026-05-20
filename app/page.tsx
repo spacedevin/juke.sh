@@ -21,7 +21,7 @@ export default function Landing() {
     <div className="center-screen">
       <div className="landing-title">juke.sh/BOX</div>
       <div className="landing-tag">Spotify WebGL Jukebox</div>
-
+      <br />
       <form className="auth-form" onSubmit={onSubmit}>
         <input
           className="client-id-input"
@@ -33,13 +33,20 @@ export default function Landing() {
           onChange={(e) => setClientId(e.target.value)}
         />
         <button className="sp-btn" type="submit">LOGIN WITH SPOTIFY</button>
+        
         <div className="auth-hint">
-          Create a Spotify app to get a Client ID (free, ~1 minute).
+          Create a Spotify app to get a Client ID<br />(free, takes ~1 minute).
           {' '}
           <a href="https://github.com/spacedevin/juke.sh/blob/main/USER_GUIDE.md" target="_blank" rel="noopener noreferrer">
             How →
           </a>
+          <br /><br /><br /><br /><br />
+          <a href="/dev">
+          Take it for a test spin without an ID →
+        </a>
         </div>
+
+
       </form>
 
       <style jsx>{`

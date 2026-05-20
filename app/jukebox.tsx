@@ -94,7 +94,7 @@ function SettingsModal({
 
         <label className="set-row">
           <div className="set-label">
-            <span>ROTATION SPEED</span>
+            <span>ROTATION SPEED [←/→]</span>
             <span className="set-val">{spin.toFixed(2)} cards/s</span>
           </div>
           <input
@@ -106,7 +106,7 @@ function SettingsModal({
 
         <label className="set-row">
           <div className="set-label">
-            <span>ROWS PER COLUMN</span>
+            <span>ROWS PER COLUMN [↑/↓]</span>
             <span className="set-val">{rows}</span>
           </div>
           <input
@@ -117,7 +117,7 @@ function SettingsModal({
 
         <label className="set-row">
           <div className="set-label">
-            <span>ZOOM-IN TIGHTNESS</span>
+            <span>ZOOM-IN TIGHTNESS [Z/X]</span>
             <span className="set-val">{zoomTight.toFixed(2)}×</span>
           </div>
           <input
@@ -129,7 +129,7 @@ function SettingsModal({
 
         <label className="set-row">
           <div className="set-label">
-            <span>ZOOM-IN FLATNESS</span>
+            <span>ZOOM-IN FLATNESS [V]</span>
             <span className="set-val">{Math.round(zoomFlat * 100)}%</span>
           </div>
           <input
@@ -140,7 +140,7 @@ function SettingsModal({
         <div className="set-hint">Higher = longer telephoto lens, cards look flatter / less 3D when zoomed in. V key cycles too.</div>
 
         <label className="set-row set-toggle">
-          <span>CATEGORY LABELS</span>
+          <span>CATEGORY LABELS [C]</span>
           <input
             type="checkbox" checked={showCategories}
             onChange={(e) => { const v = e.target.checked; setShowCategories(v); update('showCategories', v); }}
@@ -148,7 +148,7 @@ function SettingsModal({
         </label>
 
         <label className="set-row set-toggle">
-          <span>AUDIO (M)</span>
+          <span>AUDIO [M]</span>
           <input
             type="checkbox" checked={audioEnabled}
             onChange={(e) => {
@@ -464,10 +464,7 @@ export default function Jukebox({
           {showHints && (
             <div>
               <div className="instruction-badge">TAP TO PLAY/PAUSE</div>
-              <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM • C FOR CATS</div>
-              <div className="instruction-subtitle">
-                ← → ROTATION &nbsp;•&nbsp; ↑ ↓ ROWS &nbsp;•&nbsp; Z X TIGHTNESS &nbsp;•&nbsp; V FLATNESS
-              </div>
+              <div className="instruction-subtitle">SPIN LEFT/RIGHT • LIGHTING UP/DOWN • PINCH TO ZOOM</div>
               <div className="instruction-subtitle">5-TAP FOR SETTINGS</div>
             </div>
           )}
@@ -589,10 +586,10 @@ export default function Jukebox({
           text-shadow: 0 0 8px rgba(0,255,136,0.5);
           box-shadow: 0 0 18px rgba(0,255,136,0.35);
           line-height: 2em;
+          margin-bottom: 20px
         }
           .instruction-subtitle {
           color: #ffffff;
-          padding: 10px 22px;
           font-size: 14px;
           text-shadow: 0 0 8px rgba(0,0,0,0.8);
           line-height: 2em;
