@@ -18,6 +18,8 @@ export type Prefs = {
   zoomTight?: number;   // tightDist multiplier (0.4..1.2, default 0.95)
   zoomFlat?: number;    // telephoto-flatness at zoom=1 (0..1, default 0)
   audioEnabled?: boolean; // 'M' key + settings toggle for click + hum; default true
+  shuffle?: boolean;      // 'S' key + settings toggle; default true — applied via
+                          // Spotify Web API after the first play of each session
 };
 
 export function loadPrefs(): Prefs {

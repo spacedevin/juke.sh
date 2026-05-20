@@ -182,9 +182,14 @@ export type JukeTrack = {
   artist: string;
   album: string;
   source: 'now' | 'queue' | 'playlist';
+  // Spotify context URI (`spotify:playlist:...` / `spotify:album:...`) the track
+  // was discovered in. When set, play() uses it as context_uri + offset so
+  // Spotify keeps playing the next track in the playlist after this one ends,
+  // instead of stopping cold.
+  contextUri?: string;
 };
 
-function toTrack(t: any, source: JukeTrack['source']): JukeTrack | null {
+function toTrack(t: any, source: JukeTrack['source'], contextUri?: string): JukeTrack | null {
   if (!t?.uri) return null;
   return {
     uri: t.uri,
@@ -192,6 +197,7 @@ function toTrack(t: any, source: JukeTrack['source']): JukeTrack | null {
     artist: (t.artists ?? []).map((a: any) => a.name).join(', '),
     album: t.album?.name ?? '',
     source,
+    contextUri,
   };
 }
 
@@ -207,14 +213,22 @@ export async function loadAllTracks(playlistIds: string[]) {
   let nowItem: any = null;
   try {
     const now = await spotify('/me/player/currently-playing');
-    if (now?.item) { add(toTrack(now.item, 'now')); nowItem = now.item; }
-    else console.info('[jukebox] now-playing: nothing active');
+    if (now?.item) {
+      // now.context?.uri tells us where playback was started from — usually a
+      // spotify:playlist:... or spotify:album:... URI. Carrying it forward
+      // means tapping the now-playing card later plays it back IN that
+      // context (rather than starting a single-track stop-after-this play).
+      add(toTrack(now.item, 'now', now.context?.uri));
+      nowItem = now.item;
+    } else console.info('[jukebox] now-playing: nothing active');
   } catch (e) { console.error('[jukebox] now-playing failed:', e); }
 
   try {
     const q = await spotify('/me/player/queue');
     if (Array.isArray(q?.queue)) {
       console.info(`[jukebox] queue: ${q.queue.length} tracks`);
+      // Queue items don't carry their original playlist context, so play
+      // falls back to single-URI play for these.
       for (const t of q.queue) add(toTrack(t, 'queue'));
     } else {
       console.info('[jukebox] queue: empty (no active device?)');
@@ -238,7 +252,8 @@ export async function loadAllTracks(playlistIds: string[]) {
         items = items.concat(page?.items ?? []);
         next = page?.next ?? null;
       }
-      for (const it of items) add(toTrack(it.item ?? it.track, 'playlist'));
+      const contextUri = `spotify:playlist:${id}`;
+      for (const it of items) add(toTrack(it.item ?? it.track, 'playlist', contextUri));
       console.info(`[jukebox] playlist ${id}: ${items.length} tracks`);
     } catch (e) {
       console.error(`[jukebox] playlist ${id} failed:`, e);
@@ -315,12 +330,28 @@ export function getCachedPlaylistIds(): string[] {
   } catch { return []; }
 }
 
-export async function play(uri?: string) {
-  const body = uri
-    ? uri.startsWith('spotify:track:')
-      ? { uris: [uri] }
-      : { context_uri: uri }
-    : undefined;
+// Toggle Spotify's shuffle state for the user's playback. 204 No Content on
+// success; 404 if there's no active device — we ignore that and let the
+// caller no-op, since setting shuffle without playback is meaningless.
+export async function setShuffle(state: boolean) {
+  return spotify(`/me/player/shuffle?state=${state}`, { method: 'PUT' });
+}
+
+// Play a track. If `contextUri` is supplied (typically the playlist or album
+// the track was discovered in), Spotify plays the track within that context
+// and auto-continues to the next track when this one ends — so the user gets
+// a continuous listening session instead of "song plays, silence".
+//
+// Without `contextUri`, single-URI play is used (the legacy stop-after-this
+// behavior), or — if `uri` is a context URI itself — that context is played
+// from the start.
+export async function play(uri?: string, contextUri?: string) {
+  let body: any;
+  if (uri && contextUri) {
+    body = { context_uri: contextUri, offset: { uri } };
+  } else if (uri) {
+    body = uri.startsWith('spotify:track:') ? { uris: [uri] } : { context_uri: uri };
+  }
   return spotify('/me/player/play', {
     method: 'PUT',
     body: body ? JSON.stringify(body) : undefined,

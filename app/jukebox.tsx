@@ -8,6 +8,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import * as Tone from 'tone';
 import {
   isLoggedIn, login, getStoredClientId, loadAllTracks, play, nowPlaying,
+  setShuffle as spotifySetShuffle,
   getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
   getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
   type UserPlaylist,
@@ -59,7 +60,9 @@ function SettingsModal({
       zoomTight: number;
       zoomFlat: number;
       audioEnabled: boolean;
+      shuffle: boolean;
       setAudioEnabled?: (enabled: boolean) => void;
+      setShuffle?: (enabled: boolean) => void;
     };
   };
   rows: number;
@@ -73,6 +76,7 @@ function SettingsModal({
   const [zoomTight, setZoomTight] = useState(modeRef.current.zoomTight);
   const [zoomFlat, setZoomFlat] = useState(modeRef.current.zoomFlat);
   const [audioEnabled, setAudioEnabled] = useState(modeRef.current.audioEnabled);
+  const [shuffle, setShuffle] = useState(modeRef.current.shuffle);
 
   // ESC to close
   useEffect(() => {
@@ -81,7 +85,7 @@ function SettingsModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const update = <K extends 'spin' | 'showCategories' | 'zoomTight' | 'zoomFlat' | 'audioEnabled'>(k: K, v: any) => {
+  const update = <K extends 'spin' | 'showCategories' | 'zoomTight' | 'zoomFlat' | 'audioEnabled' | 'shuffle'>(k: K, v: any) => {
     (modeRef.current as any)[k] = v;
     savePrefs({ [k]: v } as any);
   };
@@ -162,6 +166,21 @@ function SettingsModal({
           />
         </label>
 
+        <label className="set-row set-toggle">
+          <span>SHUFFLE [S]</span>
+          <input
+            type="checkbox" checked={shuffle}
+            onChange={(e) => {
+              const v = e.target.checked;
+              setShuffle(v);
+              update('shuffle', v);
+              // Push the new state to Spotify immediately if a session is
+              // already active; otherwise it'll be applied at the first play.
+              modeRef.current.setShuffle?.(v);
+            }}
+          />
+        </label>
+
         <div className="modal-actions">
           <button className="sp-btn" onClick={onClose}>DONE</button>
         </div>
@@ -201,10 +220,15 @@ export default function Jukebox({
     zoomTight: number; // tightDist multiplier — Z/X keys + settings slider
     zoomFlat: number;  // telephoto-flatness at zoom=1 — V key + settings slider
     audioEnabled: boolean; // M key + settings toggle for click chord + ambient hum
+    shuffle: boolean;      // S key + settings toggle — pushed to Spotify after the
+                           // first play so the playlist auto-continues randomly
     goToActiveCard?: () => void;
     // Hook initThree exposes so the M-key handler / settings toggle can stop
     // the hum if it's already playing when audio is turned off mid-session.
     setAudioEnabled?: (enabled: boolean) => void;
+    // Hook initThree exposes so the S-key handler / settings toggle can push
+    // the new shuffle state to Spotify mid-session.
+    setShuffle?: (enabled: boolean) => void;
   }>({
     // Default to a 50/50 blend of diner + rink — both ends are now exaggerated
     // enough that pure diner or pure rink reads as a deliberate mood, and the
@@ -217,6 +241,7 @@ export default function Jukebox({
     zoomTight: clampZoomTight(initialPrefs.current.zoomTight ?? ZOOM_TIGHT_DEFAULT),
     zoomFlat: clampZoomFlat(initialPrefs.current.zoomFlat ?? 0),
     audioEnabled: initialPrefs.current.audioEnabled ?? true,
+    shuffle: initialPrefs.current.shuffle ?? true,
   });
   const cleanupRef = useRef<(() => void) | undefined>(undefined);
   // Stash hydrated data here; the initThree effect picks it up once `ready`.
@@ -336,6 +361,15 @@ export default function Jukebox({
         modeRef.current.audioEnabled = next;
         savePrefs({ audioEnabled: next });
         modeRef.current.setAudioEnabled?.(next);
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        // S = toggle Spotify shuffle. The scene-side hook pushes the new
+        // state to the Spotify API if a playback session is active; if not,
+        // the pref is saved and applied at the start of the next session.
+        const next = !modeRef.current.shuffle;
+        modeRef.current.shuffle = next;
+        savePrefs({ shuffle: next });
+        modeRef.current.setShuffle?.(next);
       }
     }
     window.addEventListener('keydown', onKey);
@@ -373,6 +407,7 @@ export default function Jukebox({
         showCategories: modeRef.current.showCategories,
         zoomTight: modeRef.current.zoomTight,
         audioEnabled: modeRef.current.audioEnabled,
+        shuffle: modeRef.current.shuffle,
       });
       flushPrefs();
     };
@@ -713,7 +748,20 @@ function initThree(
   tracks: any[],
   nowItem: any,
   onActiveChange: (hasActive: boolean) => void,
-  mode: { lighting: number; zoom: number; spin: number; debug: boolean; showCategories: boolean; zoomTight: number; zoomFlat: number; audioEnabled: boolean; goToActiveCard?: () => void; setAudioEnabled?: (enabled: boolean) => void },
+  mode: {
+    lighting: number;
+    zoom: number;
+    spin: number;
+    debug: boolean;
+    showCategories: boolean;
+    zoomTight: number;
+    zoomFlat: number;
+    audioEnabled: boolean;
+    shuffle: boolean;
+    goToActiveCard?: () => void;
+    setAudioEnabled?: (enabled: boolean) => void;
+    setShuffle?: (enabled: boolean) => void;
+  },
   rows: number,
 ) {
   let audioInitialized = false;
@@ -760,6 +808,20 @@ function initThree(
     if (!enabled && audioInitialized && humSynth?.state === 'started') {
       try { humSynth.stop(); } catch {}
     }
+  };
+
+  // Shuffle state — pushed to the Spotify API. We can't set shuffle before
+  // there's an active playback session (Spotify 404s), so we defer the very
+  // first sync until just after our first successful play() call. From then
+  // on, the S-key handler and settings toggle invoke mode.setShuffle() which
+  // hits the API immediately.
+  let shuffleInitialized = false;
+  mode.setShuffle = (enabled: boolean) => {
+    if (mode.debug) return;
+    // Even when not yet "initialized" (no first play yet), we still try —
+    // Spotify just returns 404 which we swallow, and the next first-play
+    // path will re-sync to the current pref.
+    void spotifySetShuffle(enabled).catch(() => {});
   };
 
   const scene = new THREE.Scene();
@@ -1530,7 +1592,7 @@ function initThree(
 
   // Bring the playing track to life. Finds (or places via the queue) the card
   // for the given Spotify item, sets it as active, and jumps the drum front-and-center.
-  function syncNowPlaying(item: any) {
+  function syncNowPlaying(item: any, contextUri?: string) {
     if (!item?.uri) return;
     let match = cardByUri.get(item.uri);
     if (!match) {
@@ -1540,6 +1602,7 @@ function initThree(
         artist: (item.artists || []).map((a: any) => a.name).join(', '),
         album: item.album?.name ?? '',
         source: 'now',
+        contextUri,
       });
     }
     if (!match || match === activeCard) return;
@@ -1566,7 +1629,21 @@ function initThree(
     }
     // Skip the API call for fake debug URIs.
     if (!mode.debug) {
-      try { await play(card.userData.song.uri); } catch {}
+      // Pass the playlist context URI (set during loadAllTracks) so Spotify
+      // keeps playing the rest of the playlist after this track instead of
+      // stopping. Falls back to single-URI play if the track has no known
+      // context (e.g. a `queue` source).
+      const { uri, contextUri } = card.userData.song;
+      try {
+        await play(uri, contextUri);
+        // First play of the session — push the user's preferred shuffle
+        // state to Spotify. The shuffle endpoint 404s without an active
+        // device, which is why we wait until after a successful play.
+        if (!shuffleInitialized) {
+          shuffleInitialized = true;
+          void spotifySetShuffle(mode.shuffle).catch(() => {});
+        }
+      } catch {}
     }
   }
 
@@ -1764,7 +1841,7 @@ function initThree(
     : setInterval(async () => {
         try {
           const d = await nowPlaying();
-          if (d?.item) syncNowPlaying(d.item);
+          if (d?.item) syncNowPlaying(d.item, d.context?.uri);
         } catch {}
       }, 8000);
 
