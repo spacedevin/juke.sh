@@ -246,7 +246,12 @@ export default function Jukebox({
       <div
         ref={containerRef}
         id="webgl-container"
-        style={{ visibility: phase === 'ready' ? 'visible' : 'hidden' }}
+        // tabIndex makes it focusable so iPad keyboards send keydown to us
+        // instead of the canvas (which would otherwise grab the iOS selection
+        // halo). The keydown listener is on window, so any descendant focus
+        // works.
+        tabIndex={-1}
+        style={{ visibility: phase === 'ready' ? 'visible' : 'hidden', outline: 'none' }}
       />
       {phase === 'ready' && (
         <div id="ui-overlay">
@@ -345,6 +350,16 @@ export default function Jukebox({
           left: 0;
           width: 100%;
           height: 100%;
+          outline: none;
+        }
+        /* Kill iOS selection halo / context-menu on the canvas — without
+           this, tapping the canvas on iPad steals focus and absorbs key
+           events. */
+        #webgl-container, #webgl-container canvas {
+          -webkit-user-select: none;
+          user-select: none;
+          -webkit-touch-callout: none;
+          -webkit-tap-highlight-color: transparent;
         }
         #ui-overlay { position: fixed; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; z-index: 10; }
         .instruction-badge {
@@ -463,6 +478,9 @@ function initThree(
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
+  // Take focus immediately so a hardware keyboard's first arrow / C press
+  // works without the user having to tap first.
+  try { container.focus({ preventScroll: true }); } catch {}
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -934,6 +952,9 @@ function initThree(
   }
   function onPointerDown(event: any) {
     initAudio();
+    // Pull focus back to our container so the canvas / iOS selection halo
+    // doesn't steal keyboard input from us.
+    container.focus({ preventScroll: true });
     const { x, y } = getXY(event);
     if (event.pointerId !== undefined) activePointers.set(event.pointerId, { x, y });
     downX = x; downY = y; lastY = y; downAt = Date.now();
