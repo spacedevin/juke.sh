@@ -10,7 +10,7 @@ import {
   isLoggedIn, loadAllTracks, play, nowPlaying,
   getUserPlaylists, getSelectedPlaylists, saveSelectedPlaylists,
   getCachedTracks, setCachedTracks, clearTracksCache, getCachedPlaylistIds,
-  UserPlaylist,
+  type UserPlaylist,
 } from '@/lib/spotify-client';
 import { loadPrefs, savePrefs, flushPrefs } from '@/lib/preferences';
 import { generateCardArt, preloadCardFonts, xmur3 } from '@/lib/card-art';
@@ -1788,7 +1788,6 @@ function initThree(
   // Scratch objects reused across frames to avoid 20+ allocations/frame.
   const _camOffset = new THREE.Vector3();
   const _camRight = new THREE.Vector3();
-  const _camTarget = new THREE.Vector3();
   const _camLerpTarget = new THREE.Vector3();
   const _origin = new THREE.Vector3(0, 0, 0);
   const _tColor1 = new THREE.Color();

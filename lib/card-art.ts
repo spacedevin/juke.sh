@@ -127,7 +127,7 @@ export async function preloadCardFonts(): Promise<void> {
 function getWcagLuminance(r: number, g: number, b: number): number {
   const a = [r, g, b].map((v: number) => {
     v /= 255;
-    return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
   });
   return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
 }
@@ -266,15 +266,15 @@ export function generateCardArt(song: CardSong): CardArt {
             else if (bgStyle === 34) { ctx.fillStyle = bg2; ctx.fillRect(0, 0, 256, 25); ctx.fillRect(0, 75, 256, 25); ctx.fillStyle = acc1; ctx.fillRect(0, 25, 256, 5); ctx.fillRect(0, 70, 256, 5); } 
             else if (bgStyle === 35) { ctx.fillStyle = bg1; ctx.fillRect(0, 0, 256, 100); ctx.fillStyle = bg2; ctx.beginPath(); ctx.moveTo(0, 100); ctx.lineTo(150, 0); ctx.lineTo(256, 0); ctx.lineTo(256, 100); ctx.fill(); ctx.fillStyle = '#111111'; ctx.beginPath(); ctx.moveTo(150, 100); ctx.lineTo(256, 0); ctx.lineTo(256, 100); ctx.fill(); } 
             else if (bgStyle === 36) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 256, 100); ctx.fillStyle = acc1; ctx.fillRect(10, 10, 40, 40); ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.strokeRect(5, 5, 246, 90); }
-            else if (bgStyle === 37) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; ctx.beginPath(); for(let i=0; i<16; i++) { let angle1 = (i/16) * Math.PI*2; let angle2 = ((i+0.5)/16) * Math.PI*2; ctx.moveTo(128,50); ctx.lineTo(128+Math.cos(angle1)*200, 50+Math.sin(angle1)*200); ctx.lineTo(128+Math.cos(angle2)*200, 50+Math.sin(angle2)*200); } ctx.fill(); }
-            else if (bgStyle === 38) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; for(let x=0; x<280; x+=20) { for(let y=0; y<120; y+=20) { let offset = (y/20)%2===0 ? 0 : 10; ctx.beginPath(); ctx.arc(x+offset, y, 7, 0, Math.PI*2); ctx.fill(); } } }
+            else if (bgStyle === 37) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; ctx.beginPath(); for(let i=0; i<16; i++) { const angle1 = (i/16) * Math.PI*2; const angle2 = ((i+0.5)/16) * Math.PI*2; ctx.moveTo(128,50); ctx.lineTo(128+Math.cos(angle1)*200, 50+Math.sin(angle1)*200); ctx.lineTo(128+Math.cos(angle2)*200, 50+Math.sin(angle2)*200); } ctx.fill(); }
+            else if (bgStyle === 38) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; for(let x=0; x<280; x+=20) { for(let y=0; y<120; y+=20) { const offset = (y/20)%2===0 ? 0 : 10; ctx.beginPath(); ctx.arc(x+offset, y, 7, 0, Math.PI*2); ctx.fill(); } } }
             else if (bgStyle === 39) { ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,256,100); ctx.fillStyle = acc1; ctx.fillRect(20,0,60,60); ctx.fillStyle = acc2; ctx.fillRect(150,40,106,60); ctx.fillStyle = bg2; ctx.fillRect(0, 70, 80, 30); ctx.strokeStyle = '#000'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(80,0); ctx.lineTo(80,100); ctx.moveTo(0,60); ctx.lineTo(256,60); ctx.moveTo(150,0); ctx.lineTo(150,100); ctx.stroke(); }
-            else if (bgStyle === 40) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; let w = 24, h = 36; for (let x = -15; x < 260; x += w) { for (let y = -20; y < 120; y += h) { if ((Math.round(x/w) + Math.round(y/h)) % 2 === 0) { ctx.beginPath(); ctx.moveTo(x, y + h/2); ctx.lineTo(x + w/2, y); ctx.lineTo(x + w, y + h/2); ctx.lineTo(x + w/2, y + h); ctx.fill(); } } } }
-            else if (bgStyle === 41) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); let colors = [bg2, acc1, bg1, acc2]; for(let i=0; i<4; i++) { ctx.fillStyle = colors[i]; ctx.beginPath(); ctx.arc(128, 100, 120 - (i*25), Math.PI, 0); ctx.fill(); } }
+            else if (bgStyle === 40) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; const w = 24, h = 36; for (let x = -15; x < 260; x += w) { for (let y = -20; y < 120; y += h) { if ((Math.round(x/w) + Math.round(y/h)) % 2 === 0) { ctx.beginPath(); ctx.moveTo(x, y + h/2); ctx.lineTo(x + w/2, y); ctx.lineTo(x + w, y + h/2); ctx.lineTo(x + w/2, y + h); ctx.fill(); } } } }
+            else if (bgStyle === 41) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); const colors = [bg2, acc1, bg1, acc2]; for(let i=0; i<4; i++) { ctx.fillStyle = colors[i]; ctx.beginPath(); ctx.arc(128, 100, 120 - (i*25), Math.PI, 0); ctx.fill(); } }
             else if (bgStyle === 42) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = bg2; for(let x=5; x<256; x+=12) { ctx.fillRect(x, 0, 2, 100); } }
             // NEW BACKGROUND CONCEPTS
             else if (bgStyle === 43) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.strokeStyle = bg2; ctx.lineWidth = 10; for(let y = -20; y < 120; y+=20) { ctx.beginPath(); for(let x = 0; x <= 260; x+=20) { ctx.lineTo(x, y + ((x/20)%2===0 ? 10 : 0)); } ctx.stroke(); } } // Chevron
-            else if (bgStyle === 44) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); let colors = [bg2, acc1, acc2]; for(let i=0; i<3; i++) { ctx.fillStyle = colors[i]; ctx.beginPath(); ctx.moveTo(0,100); for(let x=0; x<=256; x+=10) { ctx.lineTo(x, 30 + (i*15) + Math.sin(x/30)*15); } ctx.lineTo(256, 100); ctx.fill(); } } // Wavy 70s Stripes
+            else if (bgStyle === 44) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); const colors = [bg2, acc1, acc2]; for(let i=0; i<3; i++) { ctx.fillStyle = colors[i]; ctx.beginPath(); ctx.moveTo(0,100); for(let x=0; x<=256; x+=10) { ctx.lineTo(x, 30 + (i*15) + Math.sin(x/30)*15); } ctx.lineTo(256, 100); ctx.fill(); } } // Wavy 70s Stripes
             else if (bgStyle === 45) { ctx.fillStyle = bg1; ctx.fillRect(0,0,256,100); ctx.fillStyle = 'rgba(0,0,0,0.2)'; for(let y=0; y<100; y+=3) ctx.fillRect(0, y, 256, 1); ctx.fillStyle = 'rgba(255,255,255,0.1)'; for(let y=1; y<100; y+=3) ctx.fillRect(0, y, 256, 1); } // TV Scanlines
 
             // ==========================================
@@ -429,8 +429,8 @@ export function generateCardArt(song: CardSong): CardArt {
             else if (layoutStyle === 41) { 
                 ctx.fillStyle = aTxt; ctx.fillRect(0,0,40,100);
                 textCtx.fillStyle = getContrast(aTxt); textCtx.font = "bold 12px " + fDisp; textCtx.textAlign = 'center'; textCtx.textBaseline = 'middle';
-                let chars = art.toUpperCase().substring(0, 8); 
-                let startY = 50 - ((chars.length - 1) * 10 / 2);
+                const chars = art.toUpperCase().substring(0, 8); 
+                const startY = 50 - ((chars.length - 1) * 10 / 2);
                 for(let i=0; i<chars.length; i++) { textCtx.fillText(chars[i], 20, startY + i*10); }
                 drawAdvText(textCtx, tA, 140, 40, "30px " + fDisp, mTxt, 'center');
                 drawAdvText(textCtx, tB, 140, 70, "16px " + fInfo, mTxt, 'center');
@@ -451,11 +451,11 @@ export function generateCardArt(song: CardSong): CardArt {
             }
             // NEW LAYOUT CONCEPTS
             else if (layoutStyle === 44) { // Psychedelic Wavy Text
-                let chars = tA.split('');
-                let step = Math.min(200 / Math.max(chars.length, 1), 22);
-                let startX = 128 - ((chars.length - 1) * step) / 2;
+                const chars = tA.split('');
+                const step = Math.min(200 / Math.max(chars.length, 1), 22);
+                const startX = 128 - ((chars.length - 1) * step) / 2;
                 for(let i=0; i<chars.length; i++) {
-                    let waveY = 40 + Math.sin(i * 0.8) * 8;
+                    const waveY = 40 + Math.sin(i * 0.8) * 8;
                     drawAdvText(textCtx, chars[i], startX + i*step, waveY, "28px " + fDisp, mTxt, 'center');
                 }
                 drawAdvText(textCtx, art, 128, 75, "16px " + fScrpt, aTxt, 'center');

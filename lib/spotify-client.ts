@@ -84,7 +84,7 @@ export function consumeState(): string | null {
   return s;
 }
 
-export function logout() {
+function logout() {
   localStorage.removeItem(LS_ACCESS);
   localStorage.removeItem(LS_REFRESH);
   localStorage.removeItem(LS_EXPIRES);
@@ -137,7 +137,7 @@ async function refresh(): Promise<string | null> {
   return data.access_token;
 }
 
-export async function getToken(): Promise<string | null> {
+async function getToken(): Promise<string | null> {
   const access = localStorage.getItem(LS_ACCESS);
   const expires = Number(localStorage.getItem(LS_EXPIRES) || 0);
   if (access && Date.now() < expires) return access;

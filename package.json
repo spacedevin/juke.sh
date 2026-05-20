@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
   },
   "dependencies": {
     "lucide-react": "^0.297.0",
@@ -17,6 +20,7 @@
     "tone": "^15.1.22"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.15",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
