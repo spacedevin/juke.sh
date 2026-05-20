@@ -1,0 +1,16 @@
+{
+  "name": "@spacedevin/jukebox",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "juke.sh Lattish SPA — Spotify WebGL jukebox",
+  "scripts": {
+    "build": "node ../../scripts/build-jukebox.mjs",
+    "dev": "npm run build && tish run --feature fs --feature http --feature process dev-server.tish",
+    "dev:server": "tish run --feature fs --feature http --feature process dev-server.tish"
+  },
+  "dependencies": {
+    "@tishlang/lattish": "^1.1.3",
+    "lattish": "file:./deps/lattish"
+  }
+}

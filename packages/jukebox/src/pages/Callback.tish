@@ -1,0 +1,43 @@
+import { useState, useEffect } from "lattish"
+import { exchangeCode, consumeState } from "../lib/spotify.tish"
+
+export fn Callback() {
+  let msgState = useState("Completing login…")
+  let msg = msgState[0]
+  let setMsg = msgState[1]
+
+  useEffect(() => {
+    async fn run() {
+      let url = new URL(window.location.href)
+      let code = url.searchParams.get("code")
+      let state = url.searchParams.get("state")
+      let err = url.searchParams.get("error")
+      if (err !== null) {
+        setMsg("Auth error: " + err)
+        return
+      }
+      if (code === null) {
+        setMsg("Missing code")
+        return
+      }
+      let expected = consumeState()
+      if (expected === null || expected !== state) {
+        setMsg("State mismatch — login may have been tampered with. Please retry.")
+        return
+      }
+      try {
+        await exchangeCode(code)
+        window.location.replace("/box")
+      } catch (e) {
+        let m = String(e)
+        if (e !== null && typeof e === "object" && "message" in e) {
+          m = String(e.message)
+        }
+        setMsg(m)
+      }
+    }
+    run()
+  }, [])
+
+  return <p class="callback-msg">{msg}</p>
+}

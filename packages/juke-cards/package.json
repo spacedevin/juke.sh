@@ -1,0 +1,49 @@
+{
+  "name": "@spacedevin/juke-cards",
+  "version": "0.1.0",
+  "description": "Procedural jukebox slot card art for canvas and WebGL textures",
+  "type": "module",
+  "license": "PIF",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/spacedevin/juke.sh.git",
+    "directory": "packages/juke-cards"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "tish": {
+    "module": "./src/index.tish"
+  },
+  "main": "./lib/index.mjs",
+  "module": "./lib/index.mjs",
+  "exports": {
+    ".": {
+      "tish": "./src/index.tish",
+      "import": "./lib/index.mjs",
+      "require": "./lib/index.mjs",
+      "default": "./lib/index.mjs"
+    }
+  },
+  "files": [
+    "src/",
+    "dist/",
+    "lib/",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tish build --target js src/index.tish -o dist/index.js && node scripts/append-exports.mjs",
+    "pretest": "npm run build",
+    "test": "node test/run-tests.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/github": "^12.0.6",
+    "@semantic-release/npm": "^13.1.5",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "@tishlang/tish": "^1.10.0",
+    "semantic-release": "^25.0.3"
+  }
+}

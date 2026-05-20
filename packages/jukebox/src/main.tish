@@ -1,0 +1,45 @@
+import { createRoot } from "lattish"
+import * as spotify from "./lib/spotify.tish"
+import { App } from "./App.tish"
+
+window.__jukeSpotify = {
+  play: spotify.play,
+  nowPlaying: spotify.nowPlaying,
+  setShuffle: spotify.setShuffle,
+  addToQueue: spotify.addToQueue,
+  login: spotify.login,
+  logout: spotify.logout,
+  exchangeCode: spotify.exchangeCode,
+  consumeState: spotify.consumeState,
+  isLoggedIn: spotify.isLoggedIn,
+  getStoredClientId: spotify.getStoredClientId,
+  setStoredClientId: spotify.setStoredClientId,
+  spotify: spotify.spotifyApi,
+  loadAllTracks: spotify.loadAllTracks,
+  getUserPlaylists: spotify.getUserPlaylists,
+  getSelectedPlaylists: spotify.getSelectedPlaylists,
+  saveSelectedPlaylists: spotify.saveSelectedPlaylists,
+  getCachedTracks: spotify.getCachedTracks,
+  setCachedTracks: spotify.setCachedTracks,
+  clearTracksCache: spotify.clearTracksCache,
+  getCachedPlaylistIds: spotify.getCachedPlaylistIds,
+}
+
+let clientId = ""
+if (typeof window !== "undefined") {
+  let cfg = window.__JUKE_CONFIG
+  if (cfg !== null && typeof cfg === "object" && "spotifyClientId" in cfg) {
+    let baked = cfg.spotifyClientId
+    if (baked !== null && baked !== "") { clientId = String(baked) }
+  }
+  if (clientId === "" && typeof document !== "undefined") {
+    let meta = document.querySelector('meta[name="spotify-client-id"]')
+    if (meta !== null && meta.getAttribute !== null) {
+      let v = meta.getAttribute("content")
+      if (v !== null && v !== "") { clientId = v }
+    }
+  }
+  window.__JUKE_CONFIG = { spotifyClientId: clientId }
+}
+
+createRoot(document.getElementById("root")).render(App)

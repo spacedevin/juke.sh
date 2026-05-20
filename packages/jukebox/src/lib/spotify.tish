@@ -1,0 +1,564 @@
+// Browser-only Spotify PKCE client.
+// Tokens live in localStorage; no server proxy.
+
+// Client ID resolution: user-supplied (localStorage) takes precedence over the
+// boot config default. Lets people drop in their own Spotify app without
+// redeploying.
+import { opt } from "./utils.tish"
+
+const CLIENT_ID_KEY = "sp_client_id"
+
+fn resolveClientId() {
+  if (typeof window !== "undefined") {
+    let stored = localStorage.getItem(CLIENT_ID_KEY)
+    if (stored !== null && stored !== "") { return stored }
+    let cfg = window.__JUKE_CONFIG
+    if (cfg !== null && cfg !== undefined && typeof cfg === "object") {
+      let baked = opt(cfg, "spotifyClientId", "")
+      if (baked !== "") { return String(baked) }
+    }
+  }
+  return ""
+}
+
+export fn getStoredClientId() {
+  if (typeof window === "undefined") { return "" }
+  let stored = localStorage.getItem(CLIENT_ID_KEY)
+  if (stored === null) { return "" }
+  return stored
+}
+
+export fn getBootClientId() {
+  if (typeof window === "undefined") { return "" }
+  let cfg = window.__JUKE_CONFIG
+  if (cfg !== null && cfg !== undefined && typeof cfg === "object") {
+    let baked = opt(cfg, "spotifyClientId", "")
+    if (baked !== "") { return String(baked) }
+  }
+  return ""
+}
+
+export fn setStoredClientId(id) {
+  let v = ""
+  if (id !== null && id !== undefined) { v = String(id).trim() }
+  if (v !== "") {
+    localStorage.setItem(CLIENT_ID_KEY, v)
+  } else {
+    localStorage.removeItem(CLIENT_ID_KEY)
+  }
+}
+
+const SCOPES = [
+  "user-read-playback-state",
+  "user-modify-playback-state",
+  "user-read-currently-playing",
+  "playlist-read-private",
+  "playlist-read-collaborative",
+].join(" ")
+
+const LS_ACCESS = "sp_access"
+const LS_REFRESH = "sp_refresh"
+const LS_EXPIRES = "sp_expires"
+const SS_VERIFIER = "sp_verifier"
+const SS_STATE = "sp_state"
+
+fn redirectUri() {
+  return window.location.origin + "/callback"
+}
+
+fn b64url(bytes) {
+  let str = ""
+  let i = 0
+  while (i < bytes.length) {
+    str = str + String.fromCharCode(bytes[i])
+    i = i + 1
+  }
+  let s = btoa(str)
+  s = s.split("+").join("-")
+  s = s.split("/").join("_")
+  while (s.length > 0 && s.charAt(s.length - 1) === "=") {
+    s = s.substring(0, s.length - 1)
+  }
+  return s
+}
+
+fn randomVerifier(len) {
+  if (len === null || len === undefined) { len = 64 }
+  let arr = new Uint8Array(len)
+  crypto.getRandomValues(arr)
+  return b64url(arr)
+}
+
+async fn challenge(verifier) {
+  let hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))
+  return b64url(new Uint8Array(hash))
+}
+
+export async fn login() {
+  // PKCE: verifier + code_challenge protects the code exchange.
+  // state: random nonce stored in sessionStorage, echoed back by Spotify on
+  // the redirect; verified in /callback. Closes the CSRF window that PKCE
+  // alone doesn't cover (the flow *initiation*).
+  let verifier = randomVerifier(null)
+  let state = randomVerifier(16)
+  sessionStorage.setItem(SS_VERIFIER, verifier)
+  sessionStorage.setItem(SS_STATE, state)
+  let code_challenge = await challenge(verifier)
+  let params = new URLSearchParams({
+    client_id: resolveClientId(),
+    response_type: "code",
+    redirect_uri: redirectUri(),
+    code_challenge_method: "S256",
+    code_challenge: code_challenge,
+    state: state,
+    scope: SCOPES,
+  })
+  window.location.href = "https://accounts.spotify.com/authorize?" + params.toString()
+}
+
+export fn consumeState() {
+  let s = sessionStorage.getItem(SS_STATE)
+  sessionStorage.removeItem(SS_STATE)
+  return s
+}
+
+// Clears the Spotify session (tokens) and any session-scoped data. Keeps the
+// stored Client ID + selected playlists so the user doesn't have to redo
+// onboarding when they log back in.
+export fn logout() {
+  localStorage.removeItem(LS_ACCESS)
+  localStorage.removeItem(LS_REFRESH)
+  localStorage.removeItem(LS_EXPIRES)
+  clearTracksCache()
+}
+
+export async fn exchangeCode(code) {
+  let verifier = sessionStorage.getItem(SS_VERIFIER)
+  if (verifier === null) { throw new Error("missing PKCE verifier") }
+  let res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: resolveClientId(),
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: redirectUri(),
+      code_verifier: verifier,
+    }),
+  })
+  if (!res.ok) { throw new Error("token exchange failed: " + await res.text()) }
+  let data = await res.json()
+  storeTokens(data)
+  sessionStorage.removeItem(SS_VERIFIER)
+}
+
+fn storeTokens(data) {
+  localStorage.setItem(LS_ACCESS, data.access_token)
+  if (data.refresh_token !== null && data.refresh_token !== undefined) {
+    localStorage.setItem(LS_REFRESH, data.refresh_token)
+  }
+  localStorage.setItem(LS_EXPIRES, String(Date.now() + (data.expires_in - 30) * 1000))
+}
+
+async fn refresh() {
+  let refresh_token = localStorage.getItem(LS_REFRESH)
+  if (refresh_token === null) { return null }
+  let res = await fetch("https://accounts.spotify.com/api/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: resolveClientId(),
+      grant_type: "refresh_token",
+      refresh_token: refresh_token,
+    }),
+  })
+  if (!res.ok) {
+    logout()
+    return null
+  }
+  let data = await res.json()
+  storeTokens(data)
+  return data.access_token
+}
+
+async fn getToken() {
+  let access = localStorage.getItem(LS_ACCESS)
+  let expiresRaw = localStorage.getItem(LS_EXPIRES)
+  let expires = 0
+  if (expiresRaw !== null) { expires = Number(expiresRaw) }
+  if (access !== null && Date.now() < expires) { return access }
+  return refresh()
+}
+
+export fn isLoggedIn() {
+  let r = localStorage.getItem(LS_REFRESH)
+  return r !== null && r !== ""
+}
+
+fn copyHeaders(src) {
+  let out = {}
+  if (src === null || typeof src !== "object") { return out }
+  let keys = Object.keys(src)
+  let i = 0
+  while (i < keys.length) {
+    out[keys[i]] = src[keys[i]]
+    i = i + 1
+  }
+  return out
+}
+
+export async fn spotifyApi(path, init, retryCount) {
+  if (init === null || init === undefined) { init = {} }
+  if (retryCount === null || retryCount === undefined) { retryCount = 0 }
+  let token = await getToken()
+  if (token === null) { throw new Error("not authenticated") }
+  let headers = copyHeaders(opt(init, "headers", {}))
+  headers["Authorization"] = "Bearer " + token
+  headers["Content-Type"] = "application/json"
+  let fetchOpts = { headers: headers }
+  if ("method" in init) { fetchOpts.method = init.method }
+  if ("body" in init) { fetchOpts.body = init.body }
+  let res = await fetch("https://api.spotify.com/v1" + path, fetchOpts)
+  if (res.status === 204) { return null }
+  if (res.status === 401 && retryCount === 0) {
+    let t = await refresh()
+    if (t === null) { throw new Error("not authenticated") }
+    return spotifyApi(path, init, retryCount + 1)
+  }
+  let text = await res.text()
+  if (!res.ok) { throw new Error(String(res.status) + ": " + text) }
+  try {
+    if (text !== "") { return JSON.parse(text) }
+    return null
+  } catch (e) {
+    return text
+  }
+}
+
+fn artistNames(t) {
+  let artists = opt(t, "artists", [])
+  let names = []
+  if (Array.isArray(artists)) {
+    let i = 0
+    while (i < artists.length) {
+      let a = artists[i]
+      if (a !== null && typeof a === "object" && "name" in a) {
+        names.push(a.name)
+      }
+      i = i + 1
+    }
+  }
+  return names.join(", ")
+}
+
+fn toTrack(t, source, contextUri) {
+  if (t === null || typeof t !== "object") { return null }
+  let uri = opt(t, "uri", null)
+  if (uri === null) { return null }
+  let albumObj = opt(t, "album", null)
+  let albumName = ""
+  if (albumObj !== null && typeof albumObj === "object" && "name" in albumObj) {
+    albumName = opt(albumObj, "name", "")
+  }
+  let track = {
+    uri: uri,
+    name: opt(t, "name", ""),
+    artist: artistNames(t),
+    album: albumName,
+    source: source,
+  }
+  if (contextUri !== null && contextUri !== undefined) {
+    track.contextUri = contextUri
+  }
+  return track
+}
+
+export async fn loadAllTracks(playlistIds) {
+  let out = []
+  let seen = {}
+  fn add(t) {
+    if (t === null) { return }
+    if (t.uri in seen) { return }
+    seen[t.uri] = true
+    out.push(t)
+  }
+
+  let nowItem = null
+  try {
+    let now = await spotifyApi("/me/player/currently-playing", null, null)
+    let item = opt(now, "item", null)
+    if (item !== null) {
+      let ctx = opt(now, "context", null)
+      let ctxUri = opt(ctx, "uri", null)
+      add(toTrack(item, "now", ctxUri))
+      nowItem = item
+    } else {
+      console.info("[jukebox] now-playing: nothing active")
+    }
+  } catch (e) {
+    console.error("[jukebox] now-playing failed:", e)
+  }
+
+  try {
+    let q = await spotifyApi("/me/player/queue", null, null)
+    let queue = opt(q, "queue", null)
+    if (Array.isArray(queue)) {
+      console.info("[jukebox] queue: " + String(queue.length) + " tracks")
+      let qi = 0
+      while (qi < queue.length) {
+        add(toTrack(queue[qi], "queue", null))
+        qi = qi + 1
+      }
+    } else {
+      console.info("[jukebox] queue: empty (no active device?)")
+    }
+  } catch (e) {
+    console.error("[jukebox] queue failed:", e)
+  }
+
+  let pi = 0
+  while (pi < playlistIds.length) {
+    let id = playlistIds[pi]
+    try {
+      let p = await spotifyApi("/playlists/" + id, null, null)
+      let container = opt(p, "items", null)
+      if (container === null) { container = opt(p, "tracks", null) }
+      let items = opt(container, "items", [])
+      if (!Array.isArray(items)) { items = [] }
+      let next = opt(container, "next", null)
+      while (next !== null) {
+        let pagePath = String(next).replace("https://api.spotify.com/v1", "")
+        let page = await spotifyApi(pagePath, null, null)
+        let pageItems = opt(page, "items", [])
+        if (Array.isArray(pageItems)) {
+          items = items.concat(pageItems)
+        }
+        next = opt(page, "next", null)
+      }
+      let contextUri = "spotify:playlist:" + id
+      let ii = 0
+      while (ii < items.length) {
+        let it = items[ii]
+        let raw = opt(it, "item", null)
+        if (raw === null) { raw = opt(it, "track", null) }
+        add(toTrack(raw, "playlist", contextUri))
+        ii = ii + 1
+      }
+      console.info("[jukebox] playlist " + id + ": " + String(items.length) + " tracks")
+    } catch (e) {
+      console.error("[jukebox] playlist " + id + " failed:", e)
+    }
+    pi = pi + 1
+  }
+  console.info("[jukebox] total tracks: " + String(out.length))
+
+  return { tracks: out, nowItem: nowItem }
+}
+
+export async fn getUserPlaylists() {
+  let out = []
+  let url = "/me/playlists?limit=50"
+  while (url !== null) {
+    let p = await spotifyApi(url, null, null)
+    let items = opt(p, "items", null)
+    if (Array.isArray(items)) {
+      let i = 0
+      while (i < items.length) {
+        let it = items[i]
+        let tracksObj = opt(it, "tracks", null)
+        let itemsObj = opt(it, "items", null)
+        let total = 0
+        if (tracksObj !== null) { total = opt(tracksObj, "total", 0) }
+        if (total === 0 && itemsObj !== null) { total = opt(itemsObj, "total", 0) }
+        let images = opt(it, "images", null)
+        let image = null
+        if (Array.isArray(images) && images.length > 0) {
+          let img0 = images[0]
+          if (img0 !== null && typeof img0 === "object") {
+            image = opt(img0, "url", null)
+          }
+        }
+        out.push({
+          id: it.id,
+          name: it.name,
+          image: image,
+          tracks: total,
+        })
+        i = i + 1
+      }
+    }
+    let nextFull = opt(p, "next", null)
+    if (nextFull !== null) {
+      url = String(nextFull).replace("https://api.spotify.com/v1", "")
+    } else {
+      url = null
+    }
+  }
+  return out
+}
+
+// --- localStorage cache for selected playlists + their fetched tracks ---
+const SEL_KEY = "jukebox_selected_playlists"
+// Bumped to v2 when JukeTrack gained `contextUri` (for playlist-context play).
+const TRACKS_KEY = "jukebox_tracks_cache_v2"
+const TRACKS_TTL_MS = 60 * 60 * 1000
+
+fn cacheKey(ids) {
+  let copy = []
+  let i = 0
+  while (i < ids.length) {
+    copy.push(ids[i])
+    i = i + 1
+  }
+  copy.sort()
+  return copy.join(",")
+}
+
+export fn getSelectedPlaylists() {
+  try {
+    let raw = localStorage.getItem(SEL_KEY)
+    if (raw === null) { return [] }
+    let parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) { return parsed }
+    return []
+  } catch (e) {
+    return []
+  }
+}
+
+export fn saveSelectedPlaylists(ids) {
+  localStorage.setItem(SEL_KEY, JSON.stringify(ids))
+}
+
+export fn getCachedTracks(ids) {
+  try {
+    let raw = localStorage.getItem(TRACKS_KEY)
+    if (raw === null) { return null }
+    let obj = JSON.parse(raw)
+    if (obj.idsKey !== cacheKey(ids)) { return null }
+    if (Date.now() - obj.timestamp > TRACKS_TTL_MS) { return null }
+    let tracks = opt(obj, "tracks", [])
+    if (!Array.isArray(tracks)) { tracks = [] }
+    let ti = 0
+    while (ti < tracks.length) {
+      let t = tracks[ti]
+      if (t !== null && typeof t === "object" && t.source === "playlist") {
+        let cu = opt(t, "contextUri", null)
+        if (cu === null) { return null }
+      }
+      ti = ti + 1
+    }
+    return { tracks: tracks, nowItem: obj.nowItem }
+  } catch (e) {
+    return null
+  }
+}
+
+export fn setCachedTracks(ids, tracks, nowItem) {
+  try {
+    localStorage.setItem(TRACKS_KEY, JSON.stringify({
+      idsKey: cacheKey(ids),
+      timestamp: Date.now(),
+      tracks: tracks,
+      nowItem: nowItem,
+    }))
+  } catch (e) { }
+}
+
+export fn clearTracksCache() {
+  localStorage.removeItem(TRACKS_KEY)
+}
+
+export fn getCachedPlaylistIds() {
+  try {
+    let raw = localStorage.getItem(TRACKS_KEY)
+    if (raw === null) { return [] }
+    let obj = JSON.parse(raw)
+    if (Date.now() - obj.timestamp > TRACKS_TTL_MS) { return [] }
+    let key = opt(obj, "idsKey", "")
+    let parts = String(key).split(",")
+    let out = []
+    let i = 0
+    while (i < parts.length) {
+      if (parts[i] !== "") { out.push(parts[i]) }
+      i = i + 1
+    }
+    return out
+  } catch (e) {
+    return []
+  }
+}
+
+export async fn setShuffle(state) {
+  return spotifyApi("/me/player/shuffle?state=" + String(state), { method: "PUT" }, null)
+}
+
+export async fn addToQueue(uri) {
+  return spotifyApi("/me/player/queue?uri=" + encodeURIComponent(uri), { method: "POST" }, null)
+}
+
+export async fn getDevices() {
+  return spotifyApi("/me/player/devices", null, null)
+}
+
+export async fn transferPlayback(deviceId, playFlag) {
+  if (playFlag === null || playFlag === undefined) { playFlag = false }
+  return spotifyApi("/me/player", {
+    method: "PUT",
+    body: JSON.stringify({ device_ids: [deviceId], play: playFlag }),
+  }, null)
+}
+
+async fn sendPlay(body) {
+  let payload = null
+  if (body !== null) { payload = JSON.stringify(body) }
+  return spotifyApi("/me/player/play", {
+    method: "PUT",
+    body: payload,
+  }, null)
+}
+
+export async fn play(uri, contextUri) {
+  let body = null
+  if (uri !== null && uri !== undefined && contextUri !== null && contextUri !== undefined) {
+    body = { context_uri: contextUri, offset: { uri: uri } }
+  } else if (uri !== null && uri !== undefined) {
+    if (String(uri).indexOf("spotify:track:") === 0) {
+      body = { uris: [uri] }
+    } else {
+      body = { context_uri: uri }
+    }
+  }
+  try {
+    return await sendPlay(body)
+  } catch (err) {
+    let msg = ""
+    if (err !== null && typeof err === "object" && "message" in err) {
+      msg = String(err.message)
+    } else {
+      msg = String(err)
+    }
+    if (msg.indexOf("404") < 0 && msg.indexOf("NO_ACTIVE_DEVICE") < 0) { throw err }
+    let list = null
+    try {
+      list = await getDevices()
+    } catch (e) {
+      list = null
+    }
+    let device = null
+    if (list !== null && typeof list === "object" && "devices" in list) {
+      let devs = list.devices
+      if (Array.isArray(devs) && devs.length > 0) { device = devs[0] }
+    }
+    if (device === null) {
+      throw new Error("No Spotify devices found. Open Spotify on a phone, desktop, or web player and try again.")
+    }
+    await transferPlayback(device.id, false)
+    await new Promise((r) => setTimeout(r, 350))
+    return sendPlay(body)
+  }
+}
+
+export fn nowPlaying() {
+  return spotifyApi("/me/player/currently-playing", null, null)
+}

@@ -1,0 +1,5 @@
+import { Jukebox } from "../components/Jukebox.tish"
+
+export fn Box() {
+  return <Jukebox debug={false} />
+}

@@ -1,0 +1,8 @@
+export fn opt(o, key, fallback) {
+  if (o === null || typeof o !== "object") { return fallback }
+  if (key in o) {
+    let v = o[key]
+    if (v !== null && v !== undefined) { return v }
+  }
+  return fallback
+}

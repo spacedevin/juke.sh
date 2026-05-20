@@ -1,0 +1,18 @@
+{
+  "name": "@spacedevin/juke-bridges",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser bundle for the jukebox Three.js scene bridge",
+  "main": "dist/vendor.js",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "three": "^0.184.0",
+    "tone": "^15.1.22"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

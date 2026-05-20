@@ -1,0 +1,60 @@
+export fn PlaylistPicker({ userPlaylists, pickedIds, cachedIds, onToggle, onConfirm, onFlushCache }) {
+  let pickedCount = 0
+  let keys = Object.keys(pickedIds)
+  let ki = 0
+  while (ki < keys.length) {
+    if (pickedIds[keys[ki]]) { pickedCount = pickedCount + 1 }
+    ki = ki + 1
+  }
+
+  let rows = []
+  let i = 0
+  while (i < userPlaylists.length) {
+    let pl = userPlaylists[i]
+    let isPicked = pl.id in pickedIds && pickedIds[pl.id]
+    let isCached = pl.id in cachedIds && cachedIds[pl.id]
+    let pickCls = "sp-btn sp-btn-icon"
+    if (isPicked) { pickCls = pickCls + " picked" }
+    let plId = pl.id
+
+    rows.push(<li class="pl-row" key={plId}>
+      {pl.image !== null && pl.image !== undefined && pl.image !== ""
+        ? <img class="pl-art" src={pl.image} alt="" />
+        : <div class="pl-art pl-art-blank" />}
+      <div class="pl-meta">
+        <div class="pl-name">{pl.name}</div>
+        <div class="pl-id">{pl.id + " · " + String(pl.tracks) + " tracks"}</div>
+      </div>
+      {isCached
+        ? <button class="cache-chip" onclick={onFlushCache} title="Tracks for this playlist are cached. Click to clear and refetch.">● CACHED</button>
+        : null}
+      <button
+        class={pickCls}
+        onclick={() => onToggle(plId)}
+        title={isPicked ? "Remove" : "Add"}
+      >
+        {isPicked ? "✓" : "+"}
+      </button>
+    </li>)
+    i = i + 1
+  }
+
+  let loadLabel = "LOAD PLAYLISTS"
+  if (pickedCount > 0) {
+    loadLabel = "LOAD " + String(pickedCount) + " PLAYLIST"
+    if (pickedCount !== 1) { loadLabel = loadLabel + "S" }
+  }
+
+  return <div class="center-screen">
+    <div class="modal">
+      <div class="modal-title">SELECT PLAYLISTS</div>
+      <div class="modal-sub">Pick the playlists to load into the jukebox.</div>
+      <ul class="pl-list">{rows}</ul>
+      <div class="modal-actions">
+        <button class="sp-btn" onclick={onConfirm} disabled={pickedCount === 0}>
+          {loadLabel}
+        </button>
+      </div>
+    </div>
+  </div>
+}

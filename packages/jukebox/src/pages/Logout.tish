@@ -1,0 +1,14 @@
+import { useEffect } from "lattish"
+import { logout } from "../lib/spotify.tish"
+import { navigateRaw } from "../router.tish"
+
+export fn Logout() {
+  useEffect(() => {
+    logout()
+    navigateRaw("/")
+  }, [])
+
+  return <div class="center-screen">
+    <div class="loading-text">Logging out…</div>
+  </div>
+}

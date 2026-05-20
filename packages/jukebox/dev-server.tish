@@ -1,0 +1,58 @@
+import { fileExists, isDir } from "fs"
+import { process } from "process"
+import { serve } from "http"
+
+fn contentType(path) {
+  if (path.endsWith(".html")) { return "text/html; charset=utf-8" }
+  if (path.endsWith(".css")) { return "text/css; charset=utf-8" }
+  if (path.endsWith(".js") || path.endsWith(".mjs")) { return "application/javascript; charset=utf-8" }
+  if (path.endsWith(".wasm")) { return "application/wasm" }
+  if (path.endsWith(".json")) { return "application/json" }
+  if (path.endsWith(".svg")) { return "image/svg+xml" }
+  if (path.endsWith(".png")) { return "image/png" }
+  if (path.endsWith(".ico")) { return "image/x-icon" }
+  return "application/octet-stream"
+}
+
+fn isAssetPath(reqPath) {
+  if (reqPath.indexOf("/dist/") === 0) { return true }
+  let lastSlash = reqPath.lastIndexOf("/")
+  let lastSeg = lastSlash >= 0 ? reqPath.substring(lastSlash + 1) : reqPath
+  return lastSeg.indexOf(".") >= 0
+}
+
+fn serveFile(path) {
+  return { status: 200, headers: { "Content-Type": contentType(path), "Cache-Control": "no-store" }, file: path }
+}
+
+fn handleRequest(req) {
+  let p = req.path
+  if (p === null || p === "") { p = "/" }
+
+  if (p === "/health") {
+    return { status: 200, headers: { "Content-Type": "text/plain; charset=utf-8" }, body: "ok" }
+  }
+
+  if (p.indexOf("/callback") === 0) {
+    console.log("[jukebox] Spotify callback: " + p)
+  }
+
+  if (p === "/" || p === "") {
+    if (fileExists("public/index.html")) { return serveFile("public/index.html") }
+  }
+
+  let rel = p.charAt(0) === "/" ? p.substring(1) : p
+  let candidate = "public/" + rel
+  if (fileExists(candidate) && !isDir(candidate)) { return serveFile(candidate) }
+
+  if (!isAssetPath(p) && fileExists("public/index.html")) { return serveFile("public/index.html") }
+
+  return { status: 404, body: "Not found: " + req.path }
+}
+
+let port = 3000
+if (process !== null && process.env !== null && "PORT" in process.env) {
+  port = parseInt(process.env["PORT"])
+}
+console.log("jukebox dev server: http://127.0.0.1:" + port)
+serve(port, handleRequest)

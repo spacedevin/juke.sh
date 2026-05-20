@@ -1,0 +1,60 @@
+const palettes = [
+  ["#e63946", "#f1faee", "#1d3557", "#a8dadc"], ["#ffb703", "#fb8500", "#023047", "#8ecae6"],
+  ["#ef476f", "#ffd166", "#06d6a0", "#073b4c"], ["#ffffff", "#000000", "#dddddd", "#ff0000"],
+  ["#f4a261", "#e76f51", "#2a9d8f", "#264653"], ["#8ecae6", "#219ebc", "#023047", "#ffb703"],
+  ["#d9ed92", "#b5e48c", "#34a0a4", "#1a759f"], ["#2b2d42", "#8d99ae", "#edf2f4", "#d90429"],
+  ["#000000", "#14213d", "#fca311", "#e5e5e5"], ["#3d5a80", "#98c1d9", "#e0fbfc", "#ee6c4d"],
+  ["#ff9f1c", "#ffbf69", "#ffffff", "#cbf3f0"], ["#f72585", "#7209b7", "#3a0ca3", "#4cc9f0"],
+  ["#dad7cd", "#a3b18a", "#588157", "#344e41"], ["#fec5bb", "#fcd5ce", "#fae1dd", "#f8edeb"],
+  ["#000000", "#d4af37", "#ffffff", "#111111"], ["#ff00ff", "#00ffff", "#000000", "#ffff00"],
+  ["#f4e285", "#f4a259", "#5b8e7d", "#bc4b51"], ["#2a0800", "#f4d03f", "#e74c3c", "#ffffff"],
+  ["#fdf6e3", "#eee8d5", "#073642", "#cb4b16"], ["#4a4e69", "#9a8c98", "#c9ada7", "#f2e9e4"],
+  ["#ff595e", "#ffca3a", "#8ac926", "#1982c4"], ["#1d3557", "#457b9d", "#a8dadc", "#e63946"],
+  ["#283618", "#606c38", "#fefae0", "#dda15e"], ["#5f0f40", "#9a031e", "#fb8b24", "#e36414"],
+  ["#0b132b", "#1c2541", "#3a506b", "#5bc0be"], ["#335c67", "#fff3b0", "#e09f3e", "#9e2a2b"],
+  ["#003049", "#d62828", "#f77f00", "#fcbf49"], ["#22223b", "#4a4e69", "#9a8c98", "#c9ada7"],
+  ["#0d3b66", "#faf0ca", "#f4d35e", "#ee964b"], ["#f94144", "#f3722c", "#f8961e", "#f9c74f"],
+  ["#5d5c61", "#379683", "#7395ae", "#557a95"], ["#1a1a1d", "#4e4e50", "#6f2232", "#950740"],
+  ["#c0c0c0", "#ffffff", "#808080", "#000000"], ["#ffe066", "#247ba0", "#70c1b3", "#50514f"],
+  ["#6b2d5c", "#f0386b", "#ff5376", "#f8c0c8"],
+]
+
+const displayFonts = ["'Anton'", "'Bebas Neue'", "'Monoton'", "'Righteous'", "'Fjalla One'", "'Limelight'", "'Rampart One'", "'Rubik Mono One'", "'Abril Fatface'", "'Bungee'", "'Bangers'", "'Erica One'", "'Fugaz One'", "'Ultra'", "'Vampiro One'", "'Chicle'", "'Russo One'", "'Sigmar One'", "'Fascinate Inline'"]
+const scriptFonts = ["'Pacifico'", "'Lobster'", "'Yellowtail'", "'Satisfy'", "'Shrikhand'", "'Permanent Marker'", "'Fascinate'", "'Damion'", "'Cookie'", "'Leckerli One'"]
+const codeFonts = ["'Rubik Mono One'", "'Courier Prime'", "'Oswald'", "'Space Mono'", "'Special Elite'"]
+const infoFonts = ["'Courier Prime'", "'Oswald'", "'Cinzel'", "'Playfair Display'", "'Poiret One'", "'Arimo'", "'Corben'", "'Space Mono'", "'Special Elite'"]
+
+fn uniqueFamilies() {
+  let out = []
+  let lists = [displayFonts, scriptFonts, codeFonts, infoFonts]
+  let li = 0
+  while (li < lists.length) {
+    let list = lists[li]
+    let fi = 0
+    while (fi < list.length) {
+      let f = list[fi]
+      let found = false
+      let oi = 0
+      while (oi < out.length) {
+        if (out[oi] === f) { found = true }
+        oi = oi + 1
+      }
+      if (!found) { out.push(f) }
+      fi = fi + 1
+    }
+    li = li + 1
+  }
+  return out
+}
+
+async fn preloadCardFonts() {
+  if (typeof document === "undefined" || document.fonts === null) { return }
+  let families = uniqueFamilies()
+  let i = 0
+  while (i < families.length) {
+    let f = families[i]
+    try { await document.fonts.load("16px " + f) } catch (e) {}
+    try { await document.fonts.load("bold 16px " + f) } catch (e) {}
+    i = i + 1
+  }
+}

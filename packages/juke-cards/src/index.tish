@@ -1,0 +1,17 @@
+import { xmur3, getContrast } from "./xmur3.tish"
+import { palettes, displayFonts, scriptFonts, codeFonts, infoFonts, preloadCardFonts } from "./palettes.tish"
+import { generateCardArt } from "./generate.tish"
+
+export fn __jukeCardsBundle() {
+  return {
+    xmur3,
+    getContrast,
+    palettes,
+    displayFonts,
+    scriptFonts,
+    codeFonts,
+    infoFonts,
+    preloadCardFonts,
+    generateCardArt,
+  }
+}

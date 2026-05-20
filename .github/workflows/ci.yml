@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    name: fmt, lint, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install just
+        run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to ~/.local/bin
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Tish (npm)
+        run: npm install -g @tishlang/tish@^1.10.0
+
+      - name: fmt-check (optional — skip if tish-fmt unavailable)
+        run: |
+          if command -v tish-fmt >/dev/null 2>&1; then just fmt-check; else echo "skip fmt-check"; fi
+
+      - name: lint (optional — skip if tish-lint unavailable)
+        run: |
+          if command -v tish-lint >/dev/null 2>&1; then just lint; else echo "skip lint"; fi
+
+      - name: Test juke-cards
+        run: just test-cards
+
+      - name: Build jukebox
+        run: just build
+
+      - name: Upload static site artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jukebox-public
+          path: packages/jukebox/public
+
+  juke-cards-prerelease:
+    name: juke-cards prerelease tarball
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test-and-build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - run: npm ci
+
+      - name: Build juke-cards
+        run: npm run build --workspace=@spacedevin/juke-cards
+
+      - name: Pack tarball
+        working-directory: packages/juke-cards
+        run: npm pack && mv *.tgz juke-cards-npm-package.tgz
+
+      - name: Upload prerelease asset
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./packages/juke-cards/package.json').version")
+          TAG="v${VERSION}"
+          gh release upload "$TAG" packages/juke-cards/juke-cards-npm-package.tgz --clobber 2>/dev/null || \
+          gh release create "$TAG" packages/juke-cards/juke-cards-npm-package.tgz --prerelease --title "$TAG" --generate-notes

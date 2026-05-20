@@ -1,0 +1,14 @@
+{
+  "name": "lattish",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Resolve import \"lattish\" to @tishlang/lattish source (no wrapper).",
+  "tish": {
+    "module": "./Lattish.tish"
+  },
+  "exports": {
+    ".": {
+      "tish": "./Lattish.tish"
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "cd ../.. && npm ci",
+  "buildCommand": "cd ../.. && npm run vercel-build",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/((?!dist/).*)", "destination": "/index.html" }
+  ],
+  "redirects": [
+    {
+      "source": "/BOX",
+      "destination": "/box",
+      "permanent": true
+    },
+    {
+      "source": "/Box",
+      "destination": "/box",
+      "permanent": true
+    },
+    {
+      "source": "/DEV",
+      "destination": "/dev",
+      "permanent": true
+    },
+    {
+      "source": "/Dev",
+      "destination": "/dev",
+      "permanent": true
+    },
+    {
+      "source": "/CALLBACK",
+      "destination": "/callback",
+      "permanent": true
+    },
+    {
+      "source": "/Callback",
+      "destination": "/callback",
+      "permanent": true
+    },
+    {
+      "source": "/LOGOUT",
+      "destination": "/logout",
+      "permanent": true
+    },
+    {
+      "source": "/Logout",
+      "destination": "/logout",
+      "permanent": true
+    }
+  ]
+}

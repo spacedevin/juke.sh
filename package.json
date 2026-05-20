@@ -1,30 +1,23 @@
 {
   "name": "juke.sh",
-  "version": "0.1.0",
-  "license": "PIF",
+  "version": "0.2.0",
   "private": true,
+  "license": "PIF",
+  "workspaces": [
+    "packages/juke-cards",
+    "packages/jukebox",
+    "packages/bridges"
+  ],
   "scripts": {
-    "dev": "next dev -H 0.0.0.0",
-    "build": "next build",
-    "start": "next start",
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
-    "format": "biome format --write ."
-  },
-  "dependencies": {
-    "lucide-react": "^0.297.0",
-    "next": "^15.0.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "three": "^0.184.0",
-    "tone": "^15.1.22"
+    "build": "just build",
+    "dev": "just dev",
+    "vercel-build": "npm run build --workspace=@spacedevin/jukebox",
+    "fmt": "just fmt",
+    "fmt:check": "just fmt-check",
+    "lint": "just lint",
+    "test": "just test"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
-    "@types/node": "^22",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "@types/three": "^0.184.1",
-    "typescript": "^5"
+    "@tishlang/tish": "^1.10.0"
   }
 }
