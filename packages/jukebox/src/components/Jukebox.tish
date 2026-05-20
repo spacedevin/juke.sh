@@ -7,7 +7,7 @@ import {
 } from "../lib/spotify.tish"
 import { generateDebugTracks } from "../lib/debug-tracks.tish"
 import { preloadCardFonts } from "../../../juke-cards/src/index.tish"
-import { loadPrefs, savePrefs, flushPrefs } from "../lib/preferences.tish"
+import { loadPrefs, savePrefs, prefNumber } from "../lib/preferences.tish"
 import { opt } from "../lib/utils.tish"
 import { PlaylistPicker } from "./PlaylistPicker.tish"
 import {
@@ -92,14 +92,16 @@ export fn Jukebox({ debug, rows: initialRows }) {
   let settingsState = useState(false)
   let showSettings = settingsState[0]
   let setShowSettings = settingsState[1]
+  let settingsTickState = useState(0)
+  let settingsTick = settingsTickState[0]
+  let setSettingsTick = settingsTickState[1]
 
   let playbackState = useState("")
   let playbackMsg = playbackState[0]
   let setPlaybackMsg = playbackState[1]
 
   let playbackMsgTimer = useRef(null)
-  let rowsRef = useRef(rows)
-  rowsRef.current = rows
+  let prefsSnapshotRef = useRef({})
   let cleanupRef = useRef(null)
   let tracksDataRef = useRef(null)
   let mountedRef = useRef(true)
@@ -115,6 +117,35 @@ export fn Jukebox({ debug, rows: initialRows }) {
     audioEnabled: opt(initialPrefs, "audioEnabled", true),
     shuffle: opt(initialPrefs, "shuffle", true),
   })
+
+  fn buildPrefsSnapshot() {
+    return {
+      lighting: modeRef.current.lighting,
+      spin: clampSpin(modeRef.current.spin),
+      rows: clampRows(rows),
+      showCategories: modeRef.current.showCategories !== false,
+      zoomTight: clampZoomTight(modeRef.current.zoomTight),
+      zoomFlat: clampZoomFlat(modeRef.current.zoomFlat),
+      audioEnabled: modeRef.current.audioEnabled !== false,
+      shuffle: modeRef.current.shuffle !== false,
+    }
+  }
+
+  prefsSnapshotRef.current = buildPrefsSnapshot()
+
+  // Lattish reuses useState slots across route changes — always re-read localStorage
+  // on mount so saved rows/spin/etc. apply even when the hook slot is stale.
+  useEffect(() => {
+    let prefs = loadPrefs()
+    setRows(clampRows(prefNumber(prefs, "rows", initialRows)))
+    modeRef.current.lighting = clampUnit(prefNumber(prefs, "lighting", 0.5))
+    modeRef.current.spin = clampSpin(prefNumber(prefs, "spin", 0))
+    modeRef.current.showCategories = opt(prefs, "showCategories", true)
+    modeRef.current.zoomTight = clampZoomTight(prefNumber(prefs, "zoomTight", ZOOM_TIGHT_DEFAULT))
+    modeRef.current.zoomFlat = clampZoomFlat(prefNumber(prefs, "zoomFlat", 0))
+    modeRef.current.audioEnabled = opt(prefs, "audioEnabled", true)
+    modeRef.current.shuffle = opt(prefs, "shuffle", true)
+  }, [])
 
   fn showPlaybackError(msg) {
     if (!mountedRef.current) { return }
@@ -231,9 +262,12 @@ export fn Jukebox({ debug, rows: initialRows }) {
       zoomFlat: m.zoomFlat,
       audioEnabled: m.audioEnabled,
       shuffle: m.shuffle,
-      rows: rows,
+      rows: clampRows(rows),
     })
     modeRef.current = scene.mode
+    modeRef.current.spin = clampSpin(modeRef.current.spin)
+    modeRef.current.zoomTight = clampZoomTight(modeRef.current.zoomTight)
+    modeRef.current.zoomFlat = clampZoomFlat(modeRef.current.zoomFlat)
     cleanupRef.current = scene.dispose
 
     return () => {
@@ -262,14 +296,18 @@ export fn Jukebox({ debug, rows: initialRows }) {
         savePrefs({ spin: modeRef.current.spin })
       } else if (ev.key === "ArrowUp") {
         ev.preventDefault()
-        let n = Math.min(MAX_ROWS, rowsRef.current + 1)
-        setRows(n)
-        savePrefs({ rows: n })
+        let n = clampRows(Math.min(MAX_ROWS, rows + 1))
+        if (n !== rows) {
+          setRows(n)
+          savePrefs({ rows: n })
+        }
       } else if (ev.key === "ArrowDown") {
         ev.preventDefault()
-        let n = Math.max(MIN_ROWS, rowsRef.current - 1)
-        setRows(n)
-        savePrefs({ rows: n })
+        let n = clampRows(Math.max(MIN_ROWS, rows - 1))
+        if (n !== rows) {
+          setRows(n)
+          savePrefs({ rows: n })
+        }
       } else if (ev.key === "z" || ev.key === "Z") {
         ev.preventDefault()
         modeRef.current.zoomTight = clampZoomTight(modeRef.current.zoomTight - 0.05)
@@ -304,7 +342,19 @@ export fn Jukebox({ debug, rows: initialRows }) {
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [])
+  }, [rows])
+
+  useEffect(() => {
+    if (!showSettings) { return () => {} }
+    fn onKey(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault()
+        onCloseSettings()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [showSettings])
 
   let tapTimes = useRef([])
   let pdAt = 0
@@ -342,15 +392,8 @@ export fn Jukebox({ debug, rows: initialRows }) {
       }
     }
     fn onHide() {
-      savePrefs({
-        lighting: modeRef.current.lighting,
-        spin: modeRef.current.spin,
-        showCategories: modeRef.current.showCategories,
-        zoomTight: modeRef.current.zoomTight,
-        audioEnabled: modeRef.current.audioEnabled,
-        shuffle: modeRef.current.shuffle,
-      })
-      flushPrefs()
+      if (typeof document !== "undefined" && document.visibilityState !== "hidden") { return }
+      savePrefs(prefsSnapshotRef.current)
     }
     window.addEventListener("pointerdown", onDown)
     window.addEventListener("pointerup", onUp)
@@ -395,9 +438,17 @@ export fn Jukebox({ debug, rows: initialRows }) {
 
   fn onDismissPlayback() { setPlaybackMsg("") }
 
-  fn onCloseSettings() { setShowSettings(false) }
+  fn onCloseSettings() {
+    savePrefs(buildPrefsSnapshot())
+    setShowSettings(false)
+  }
+
+  fn onSettingsPanelChange() {
+    setSettingsTick(settingsTick + 1)
+  }
 
   fn onChangeRows(n) {
+    n = clampRows(n)
     setRows(n)
     savePrefs({ rows: n })
   }
@@ -451,12 +502,14 @@ export fn Jukebox({ debug, rows: initialRows }) {
         />
       : null}
 
-    {showSettings
+    {phase === "ready"
       ? <SettingsPanel
+          open={showSettings}
           modeRef={modeRef}
           rows={rows}
           onChangeRows={onChangeRows}
           onClose={onCloseSettings}
+          onPanelChange={onSettingsPanelChange}
         />
       : null}
   </div>

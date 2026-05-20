@@ -1,4 +1,3 @@
-import { useState, useEffect } from "lattish"
 import { savePrefs } from "../lib/preferences.tish"
 
 export const SPIN_MAX = 10
@@ -10,6 +9,8 @@ export const ZOOM_TIGHT_MAX = 1.2
 export const ZOOM_FLAT_STEP = 0.2
 
 export fn clampRows(n) {
+  if (typeof n !== "number" || n !== n) { n = Number(n) }
+  if (typeof n !== "number" || n !== n) { return MIN_ROWS }
   let v = n | 0
   if (v < MIN_ROWS) { return MIN_ROWS }
   if (v > MAX_ROWS) { return MAX_ROWS }
@@ -17,109 +18,108 @@ export fn clampRows(n) {
 }
 
 export fn clampSpin(n) {
+  if (typeof n !== "number" || n !== n) { n = Number(n) }
+  if (typeof n !== "number" || n !== n) { return 0 }
   if (n < -SPIN_MAX) { return -SPIN_MAX }
   if (n > SPIN_MAX) { return SPIN_MAX }
   return n
 }
 
 export fn clampZoomTight(n) {
+  if (typeof n !== "number" || n !== n) { n = Number(n) }
+  if (typeof n !== "number" || n !== n) { return ZOOM_TIGHT_MIN }
   if (n < ZOOM_TIGHT_MIN) { return ZOOM_TIGHT_MIN }
   if (n > ZOOM_TIGHT_MAX) { return ZOOM_TIGHT_MAX }
   return n
 }
 
 export fn clampZoomFlat(n) {
+  if (typeof n !== "number" || n !== n) { n = Number(n) }
+  if (typeof n !== "number" || n !== n) { return 0 }
   if (n < 0) { return 0 }
   if (n > 1) { return 1 }
   return n
 }
 
-export fn SettingsPanel({ modeRef, rows, onChangeRows, onClose }) {
-  let spinState = useState(modeRef.current.spin)
-  let spin = spinState[0]
-  let setSpin = spinState[1]
-  let showCatState = useState(modeRef.current.showCategories)
-  let showCategories = showCatState[0]
-  let setShowCategories = showCatState[1]
-  let zoomTightState = useState(modeRef.current.zoomTight)
-  let zoomTight = zoomTightState[0]
-  let setZoomTight = zoomTightState[1]
-  let zoomFlatState = useState(modeRef.current.zoomFlat)
-  let zoomFlat = zoomFlatState[0]
-  let setZoomFlat = zoomFlatState[1]
-  let audioState = useState(modeRef.current.audioEnabled)
-  let audioEnabled = audioState[0]
-  let setAudioEnabled = audioState[1]
-  let shuffleState = useState(modeRef.current.shuffle)
-  let shuffle = shuffleState[0]
-  let setShuffleLocal = shuffleState[1]
+export fn fmtNum(n, digits) {
+  if (typeof n !== "number" || n !== n) { n = 0 }
+  return n.toFixed(digits)
+}
 
-  useEffect(() => {
-    fn onKey(ev) {
-      if (ev.key === "Escape") {
-        ev.preventDefault()
-        onClose()
-      }
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [])
+// Stateless panel — no useState/useEffect here. Lattish shares one global hook
+// list; mounting a hook-using child corrupts Jukebox state when it unmounts.
+// Also stay mounted (open prop) so toggling settings does not change sibling
+// count on jukebox-root — Lattish replaceChildren would recreate #webgl-container.
+export fn SettingsPanel({ open, modeRef, rows, onChangeRows, onClose, onPanelChange }) {
+  let m = modeRef.current
+  let spin = clampSpin(m.spin)
+  let showCategories = m.showCategories !== false
+  let zoomTight = clampZoomTight(m.zoomTight)
+  let zoomFlat = clampZoomFlat(m.zoomFlat)
+  let audioEnabled = m.audioEnabled !== false
+  let shuffle = m.shuffle !== false
 
-  fn updateSpin(v) { modeRef.current.spin = v; savePrefs({ spin: v }) }
-  fn updateShowCategories(v) { modeRef.current.showCategories = v; savePrefs({ showCategories: v }) }
-  fn updateZoomTight(v) { modeRef.current.zoomTight = v; savePrefs({ zoomTight: v }) }
-  fn updateZoomFlat(v) { modeRef.current.zoomFlat = v; savePrefs({ zoomFlat: v }) }
-  fn updateAudioEnabled(v) { modeRef.current.audioEnabled = v; savePrefs({ audioEnabled: v }) }
-  fn updateShuffle(v) { modeRef.current.shuffle = v; savePrefs({ shuffle: v }) }
+  fn bump() {
+    if (onPanelChange !== null && onPanelChange !== undefined) { onPanelChange() }
+  }
 
   fn onBackdropClick() { onClose() }
   fn stopProp(ev) { ev.stopPropagation() }
 
   fn onSpinInput(ev) {
-    let v = parseFloat(ev.target.value)
-    setSpin(v)
-    updateSpin(v)
+    let v = clampSpin(parseFloat(ev.target.value))
+    m.spin = v
+    savePrefs({ spin: v })
+    bump()
   }
   fn onSpinZero() {
-    setSpin(0)
-    updateSpin(0)
+    m.spin = 0
+    savePrefs({ spin: 0 })
+    bump()
   }
   fn onRowsInput(ev) {
     onChangeRows(clampRows(parseInt(ev.target.value)))
   }
   fn onZoomTightInput(ev) {
-    let v = parseFloat(ev.target.value)
-    setZoomTight(v)
-    updateZoomTight(v)
+    let v = clampZoomTight(parseFloat(ev.target.value))
+    m.zoomTight = v
+    savePrefs({ zoomTight: v })
+    bump()
   }
   fn onZoomFlatInput(ev) {
-    let v = parseFloat(ev.target.value)
-    setZoomFlat(v)
-    updateZoomFlat(v)
+    let v = clampZoomFlat(parseFloat(ev.target.value))
+    m.zoomFlat = v
+    savePrefs({ zoomFlat: v })
+    bump()
   }
   fn onShowCatChange(ev) {
-    let v = ev.target.checked
-    setShowCategories(v)
-    updateShowCategories(v)
+    m.showCategories = ev.target.checked
+    savePrefs({ showCategories: m.showCategories })
+    bump()
   }
   fn onAudioChange(ev) {
-    let v = ev.target.checked
-    setAudioEnabled(v)
-    updateAudioEnabled(v)
-    if (modeRef.current.setAudioEnabled !== undefined) {
-      modeRef.current.setAudioEnabled(v)
+    m.audioEnabled = ev.target.checked
+    savePrefs({ audioEnabled: m.audioEnabled })
+    if (m.setAudioEnabled !== null && m.setAudioEnabled !== undefined) {
+      m.setAudioEnabled(m.audioEnabled)
     }
+    bump()
   }
   fn onShuffleChange(ev) {
-    let v = ev.target.checked
-    setShuffleLocal(v)
-    updateShuffle(v)
-    if (modeRef.current.setShuffle !== undefined) {
-      modeRef.current.setShuffle(v)
+    m.shuffle = ev.target.checked
+    savePrefs({ shuffle: m.shuffle })
+    if (m.setShuffle !== null && m.setShuffle !== undefined) {
+      m.setShuffle(m.shuffle)
     }
+    bump()
   }
 
-  return <div class="center-screen settings-backdrop" onclick={onBackdropClick}>
+  if (open === null || open === undefined) { open = false }
+
+  let backdropClass = "center-screen settings-backdrop"
+  if (!open) { backdropClass = backdropClass + " is-hidden" }
+
+  return <div class={backdropClass} onclick={onBackdropClick}>
     <div class="modal modal-narrow" onclick={stopProp}>
       <div class="modal-title">SETTINGS</div>
       <div class="modal-sub">5-tap anywhere to reopen · ESC to close</div>
@@ -127,7 +127,7 @@ export fn SettingsPanel({ modeRef, rows, onChangeRows, onClose }) {
       <label class="set-row">
         <div class="set-label">
           <span>ROTATION SPEED [←/→]</span>
-          <span class="set-val">{spin.toFixed(2) + " cards/s"}</span>
+          <span class="set-val">{fmtNum(spin, 2) + " cards/s"}</span>
         </div>
         <input type="range" min={-SPIN_MAX} max={SPIN_MAX} step={SPIN_STEP} value={spin} oninput={onSpinInput} />
         <button class="set-zero" onclick={onSpinZero} title="Stop">⏹</button>
@@ -144,7 +144,7 @@ export fn SettingsPanel({ modeRef, rows, onChangeRows, onClose }) {
       <label class="set-row">
         <div class="set-label">
           <span>ZOOM-IN TIGHTNESS [Z/X]</span>
-          <span class="set-val">{zoomTight.toFixed(2) + "×"}</span>
+          <span class="set-val">{fmtNum(zoomTight, 2) + "×"}</span>
         </div>
         <input type="range" min={ZOOM_TIGHT_MIN} max={ZOOM_TIGHT_MAX} step={0.05} value={zoomTight} oninput={onZoomTightInput} />
       </label>
@@ -153,7 +153,7 @@ export fn SettingsPanel({ modeRef, rows, onChangeRows, onClose }) {
       <label class="set-row">
         <div class="set-label">
           <span>ZOOM-IN FLATNESS [V]</span>
-          <span class="set-val">{String(Math.round(zoomFlat * 100)) + "%"}</span>
+          <span class="set-val">{String(Math.round(clampZoomFlat(zoomFlat) * 100)) + "%"}</span>
         </div>
         <input type="range" min={0} max={1} step={0.05} value={zoomFlat} oninput={onZoomFlatInput} />
       </label>

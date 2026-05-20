@@ -411,6 +411,10 @@ body {
   backdrop-filter: blur(6px);
 }
 
+.settings-backdrop.is-hidden {
+  display: none;
+}
+
 .modal.modal-narrow {
   width: min(360px, 92vw);
   padding: 18px;
