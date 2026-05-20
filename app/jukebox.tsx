@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import * as Tone from 'tone';
 import {
   isLoggedIn, loadAllTracks, play, nowPlaying,
@@ -914,31 +915,78 @@ function initThree(
   neonBot.rotation.x = Math.PI / 2; neonBot.position.y = -HEIGHT_TOTAL / 2 - 0.5; jukeboxGroup.add(neonBot);
   jukeboxGroup.add(new THREE.Mesh(new THREE.CylinderGeometry(R + 1.6, R + 1.6, HEIGHT_TOTAL + 2, 64, 1, true), new THREE.MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.1, roughness: 0.05, metalness: 0.9, clearcoat: 1.0, side: THREE.FrontSide })));
 
+  // ----- Brackets (baked into 3 merged geometries instead of ~80 meshes) -----
+  // Each bracket was a Group of 1 base + 1–2 chrome accents, positioned in a
+  // ring. None of them move relative to each other, so we bake the per-column
+  // transform into the geometry once and merge by material. 36 cols × ~2.5
+  // sub-meshes = ~90 draw calls → 3 draw calls (one per material).
+  const tealGeos: THREE.BufferGeometry[] = [];
+  const aluminumGeos: THREE.BufferGeometry[] = [];
+  const chromeGeos: THREE.BufferGeometry[] = [];
+  const Y_UP = new THREE.Vector3(0, 1, 0);
   for (let i = 0; i < COLS; i++) {
     const theta = i * COL_ANGLE;
-    const bg = new THREE.Group();
+    const groupMatrix = new THREE.Matrix4().compose(
+      new THREE.Vector3(Math.sin(theta) * (R + 0.12), 0, Math.cos(theta) * (R + 0.12)),
+      new THREE.Quaternion().setFromAxisAngle(Y_UP, theta),
+      new THREE.Vector3(1, 1, 1),
+    );
     if (i % 2 === 0) {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(0.5, HEIGHT_TOTAL - 2, 0.4), tealMaterial);
-      base.castShadow = true; base.receiveShadow = true;
-      bg.add(base);
-      const pL = new THREE.Mesh(new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04), chromeMat); pL.position.set(-0.15, 0, 0.2); bg.add(pL);
-      const pR = new THREE.Mesh(new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04), chromeMat); pR.position.set(0.15, 0, 0.2); bg.add(pR);
+      // Teal base centered in the bracket
+      const b = new THREE.BoxGeometry(0.5, HEIGHT_TOTAL - 2, 0.4);
+      b.applyMatrix4(groupMatrix);
+      tealGeos.push(b);
+      // Two chrome pipes flanking the front face
+      for (const dx of [-0.15, 0.15]) {
+        const p = new THREE.BoxGeometry(0.04, HEIGHT_TOTAL - 2, 0.04);
+        p.applyMatrix4(new THREE.Matrix4().multiplyMatrices(groupMatrix, new THREE.Matrix4().setPosition(dx, 0, 0.2)));
+        chromeGeos.push(p);
+      }
     } else {
-      const base = new THREE.Mesh(new THREE.BoxGeometry(0.3, HEIGHT_TOTAL - 2, 0.15), aluminumMat);
-      base.castShadow = true; base.receiveShadow = true;
-      bg.add(base);
-      const spine = new THREE.Mesh(new THREE.BoxGeometry(0.1, HEIGHT_TOTAL - 2, 0.08), chromeMat); spine.position.set(0, 0, 0.1); bg.add(spine);
+      // Aluminum base + single chrome spine
+      const b = new THREE.BoxGeometry(0.3, HEIGHT_TOTAL - 2, 0.15);
+      b.applyMatrix4(groupMatrix);
+      aluminumGeos.push(b);
+      const s = new THREE.BoxGeometry(0.1, HEIGHT_TOTAL - 2, 0.08);
+      s.applyMatrix4(new THREE.Matrix4().multiplyMatrices(groupMatrix, new THREE.Matrix4().setPosition(0, 0, 0.1)));
+      chromeGeos.push(s);
     }
-    bg.position.set(Math.sin(theta) * (R + 0.12), 0, Math.cos(theta) * (R + 0.12));
-    bg.rotation.y = theta;
-    jukeboxGroup.add(bg);
   }
+  const tealMerged = mergeGeometries(tealGeos, false);
+  const aluminumMerged = mergeGeometries(aluminumGeos, false);
+  const chromeBracketsMerged = mergeGeometries(chromeGeos, false);
+  // mergeGeometries copies vertex data, so the source geometries are dead weight now.
+  for (const g of [...tealGeos, ...aluminumGeos, ...chromeGeos]) g.dispose();
+  for (const merged of [tealMerged, aluminumMerged, chromeBracketsMerged]) {
+    if (!merged) continue;
+    const mat = merged === tealMerged ? tealMaterial
+              : merged === aluminumMerged ? aluminumMat
+              : chromeMat;
+    const m = new THREE.Mesh(merged, mat);
+    m.castShadow = true; m.receiveShadow = true;
+    jukeboxGroup.add(m);
+  }
+
+  // ----- Row divider torii (ROWS+1 of them, all on whiteBracketMat) → 1 mesh
+  const ringGeos: THREE.BufferGeometry[] = [];
   for (let r = 0; r <= ROWS; r++) {
     const y = startY - r * ROW_SPACING + ROW_SPACING / 2;
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(R + 0.08, 0.1, 16, 64), whiteBracketMat);
-    ring.rotation.x = Math.PI / 2; ring.position.y = y;
-    ring.castShadow = true; ring.receiveShadow = true;
-    jukeboxGroup.add(ring);
+    // 8×32 segments instead of 16×64 — these are tiny rings seen edge-on most
+    // of the time, the smoothness drop is invisible. 4× fewer triangles each.
+    const g = new THREE.TorusGeometry(R + 0.08, 0.1, 8, 32);
+    g.applyMatrix4(new THREE.Matrix4().compose(
+      new THREE.Vector3(0, y, 0),
+      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2),
+      new THREE.Vector3(1, 1, 1),
+    ));
+    ringGeos.push(g);
+  }
+  const ringsMerged = mergeGeometries(ringGeos, false);
+  for (const g of ringGeos) g.dispose();
+  if (ringsMerged) {
+    const ringsMesh = new THREE.Mesh(ringsMerged, whiteBracketMat);
+    ringsMesh.castShadow = true; ringsMesh.receiveShadow = true;
+    jukeboxGroup.add(ringsMesh);
   }
 
   const ledGeo = new THREE.CylinderGeometry(0.02, 0.02, CARD_W - 0.1, 8);
@@ -1097,6 +1145,9 @@ function initThree(
     cards.push(card);
     cardByUri.set(card.userData.song.uri, card);
     queueCards.push(card);
+    // Force the back-of-drum cull to re-evaluate next frame so the new card
+    // gets its visibility set (otherwise it could pop in/out for a frame).
+    lastCullRot = NaN;
     return card;
   }
 
@@ -1329,6 +1380,10 @@ function initThree(
 
   const clock = new THREE.Clock();
   let raf = 0;
+  // Sentinel for cheap "did the drum rotate this frame?" check (skips the
+  // back-of-drum cull when nothing moved). NaN guarantees the first frame
+  // runs the cull pass.
+  let lastCullRot = NaN;
 
   // Scratch objects reused across frames to avoid 20+ allocations/frame.
   const _camOffset = new THREE.Vector3();
@@ -1563,10 +1618,19 @@ function initThree(
         tr.light.intensity = 0;
       }
     }
-    cards.forEach((c) => {
-      const tgt = activeCard === c ? 0.3 : 0;
-      c.material.emissiveIntensity += (tgt - c.material.emissiveIntensity) * 0.1;
-    });
+    // Back-of-drum culling. Cards on the far side of the drum are still
+    // submitted to the GPU even though backface-cull discards their fragments.
+    // Hiding them outright (set .visible = false) skips frustum + draw-call
+    // submission entirely. Only re-evaluate when the drum has actually rotated
+    // — that's the only thing that can change a card's world theta.
+    if (jukeboxGroup.rotation.y !== lastCullRot) {
+      lastCullRot = jukeboxGroup.rotation.y;
+      const limit = -0.34; // cos(110°) — keeps front + sides, drops the back third
+      for (const c of cards) {
+        const dotFront = Math.cos(c.userData.theta + lastCullRot - CAMERA_AZ);
+        c.visible = dotFront > limit;
+      }
+    }
     renderer.render(scene, camera);
   }
   animate();
