@@ -522,15 +522,25 @@ function initThree(
   floorMesh.receiveShadow = true;
   scene.add(floorMesh);
 
-  // Env map
+  function xmur3(str: string) {
+    let h = 1779033703 ^ str.length;
+    for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+    return () => { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); return ((h ^= h >>> 16) >>> 0); };
+  }
+
+  // Env map — seeded so chrome reflections are identical across reloads
   const envCanvas = document.createElement('canvas');
   envCanvas.width = 1024; envCanvas.height = 512;
   const envCtx = envCanvas.getContext('2d')!;
   envCtx.fillStyle = '#050203'; envCtx.fillRect(0, 0, 1024, 512);
+  const envSeed = xmur3('jukebox-env');
+  const envRnd = () => (envSeed() >>> 0) / 4294967296;
+  const envRndInt = (max: number) => Math.floor(envRnd() * max);
+  const envColors = ['#00ffff', '#ff00ff', '#ffffff', '#ffaa00'];
   for (let i = 0; i < 30; i++) {
-    envCtx.fillStyle = ['#00ffff', '#ff00ff', '#ffffff', '#ffaa00'][Math.floor(Math.random() * 4)];
-    envCtx.globalAlpha = 0.2 + Math.random() * 0.8;
-    envCtx.fillRect(Math.random() * 1024, Math.random() * 512, 100 + Math.random() * 300, 5 + Math.random() * 20);
+    envCtx.fillStyle = envColors[envRndInt(envColors.length)];
+    envCtx.globalAlpha = 0.2 + envRnd() * 0.8;
+    envCtx.fillRect(envRnd() * 1024, envRnd() * 512, 100 + envRnd() * 300, 5 + envRnd() * 20);
   }
   const envTex = new THREE.CanvasTexture(envCanvas);
   envTex.mapping = THREE.EquirectangularReflectionMapping;
@@ -624,11 +634,6 @@ function initThree(
   }
 
   // --- Procedural card-texture generator ---
-  function xmur3(str: string) {
-    let h = 1779033703 ^ str.length;
-    for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
-    return () => { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); return ((h ^= h >>> 16) >>> 0); };
-  }
   const palettes = [
     ['#e63946', '#f1faee', '#1d3557', '#a8dadc'], ['#ffb703', '#fb8500', '#023047', '#8ecae6'],
     ['#ef476f', '#ffd166', '#06d6a0', '#073b4c'], ['#ffffff', '#000000', '#dddddd', '#ff0000'],
