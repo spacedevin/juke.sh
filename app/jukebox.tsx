@@ -290,8 +290,19 @@ export default function Jukebox({
       )}
 
       <style jsx global>{`
-        body { overflow: hidden; touch-action: none; }
-        #webgl-container { background: black; position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        body {
+          overflow: hidden;
+          touch-action: none;
+          background: radial-gradient(circle at center, #11090c 0%, #000000 100%);
+        }
+        #webgl-container {
+          background: radial-gradient(circle at center, #11090c 0%, #000000 100%);
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+        }
         #ui-overlay { position: fixed; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; z-index: 10; }
         .instruction-badge {
           background: rgba(20,10,15,0.85);
