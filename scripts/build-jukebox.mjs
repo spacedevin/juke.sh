@@ -8,7 +8,9 @@ import { loadRepoEnv, resolveSpotifyClientId } from "./load-env.mjs"
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const jukebox = path.join(root, "packages/jukebox")
 const dist = path.join(jukebox, "public/dist")
-const tish = process.env.TISH || "tish"
+const tish =
+  process.env.TISH ||
+  path.join(root, "node_modules", ".bin", "tish")
 
 function run(cmd, args, cwd) {
   const r = spawnSync(cmd, args, { cwd, stdio: "inherit" })

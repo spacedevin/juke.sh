@@ -11,6 +11,7 @@
   "scripts": {
     "build": "just build",
     "dev": "just dev",
+    "vercel-build": "npm run build --workspace=@spacedevin/jukebox",
     "fmt": "just fmt",
     "fmt:check": "just fmt-check",
     "lint": "just lint",

@@ -68,9 +68,13 @@ Arrow keys: spin (←/→), rows (↑/↓). `C` category labels, `M` audio, `S` 
 
 ## Deploy (Vercel)
 
-Root directory: `packages/jukebox`. Output: `public/`. Config in `vercel.json`.
+This is a **static SPA**, not Next.js. In the Vercel project settings:
 
-Set `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` or `SPOTIFY_CLIENT_ID` in the Vercel project's environment variables (build time). The build writes it to `public/dist/config.js`.
+1. **Root Directory:** leave empty (repo root) — or set `packages/jukebox` if you prefer; both `vercel.json` files are configured for monorepo builds.
+2. **Framework Preset:** **Other** (not Next.js). The repo sets `"framework": null` in `vercel.json` to skip framework detection.
+3. **Environment variables:** `NEXT_PUBLIC_SPOTIFY_CLIENT_ID` or `SPOTIFY_CLIENT_ID` (build time → `public/dist/config.js`).
+
+Build runs `npm run vercel-build` from the monorepo root (installs workspaces, compiles Tish, writes static files to `packages/jukebox/public/`).
 
 ## Card art package
 
