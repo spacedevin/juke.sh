@@ -1,10 +1,10 @@
-// Native jukebox iOS — card art from Tish juke-cards; display via UIKit host tags.
+// Native jukebox iOS — card art + Metal drum scene.
 //
 // Build: `just run-jukebox-ios-sim` from jukebox repo root.
 
 import { ios, useState } from "tish:ios"
 import { isLoggedIn } from "tish:spotify-ios"
-import { createSceneView, version as sceneVersion } from "tish:juke-scene"
+import { debugSceneParse, version as sceneVersion } from "tish:juke-scene"
 import { generateCardArt } from "@spacedevin/juke-cards"
 
 let demoSongs = [
@@ -14,18 +14,45 @@ let demoSongs = [
   { titleA: "BILLIE JEAN", titleB: "", artist: "Michael Jackson", code: "D4" },
 ]
 
+fn makeSceneFromArt(art) {
+  let radius = 1.35
+  return {
+    cols: 1,
+    rows: 1,
+    radius: radius,
+    heightTotal: 2.1,
+    cells: [{
+      c: 0,
+      r: 0,
+      x: 0,
+      y: 0,
+      z: radius,
+      theta: 0,
+      canvas: art.canvas,
+    }],
+  }
+}
+
 fn App() {
   let [tick, setTick] = useState(0)
+  let [scene, setScene] = useState(null)
   let loggedIn = isLoggedIn()
   let song = demoSongs[tick % demoSongs.length]
   let art = generateCardArt(song)
+
+  let metalDebug = scene === null ? "tap Load scene" : debugSceneParse(scene)
+  let sceneLabel = scene === null ? "drum preview" : "1x1, 1 cells"
+  let loadLabel = scene === null ? "Load scene" : "Reload scene"
+
   return (
     <div>
       <h1>juke.sh</h1>
       <p>{"Spotify: " + (loggedIn ? "logged in" : "not logged in")}</p>
-      <p>{"Scene: " + sceneVersion}</p>
+      <p>{"Scene: " + sceneVersion + " (" + sceneLabel + ")"}</p>
+      <p>{"Metal: " + metalDebug}</p>
       <CardArt art={art} height={100} />
-      <SceneView height={280} />
+      <SceneView height={280} scene={scene} />
+      <button onClick={() => setScene(makeSceneFromArt(art))}>{loadLabel}</button>
       <button onClick={() => setTick(tick + 1)}>
         {"Refresh card (" + tick + ")"}
       </button>

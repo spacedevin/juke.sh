@@ -1,14 +1,17 @@
-//! Metal drum preview renderer (jukebox scene MVP).
+//! Metal drum preview + optional textured card instances.
 
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
 
 use metal::{
     Buffer, CommandQueue, CompileOptions, Device, MTLClearColor, MTLIndexType, MTLLoadAction,
-    MTLPixelFormat, MTLPrimitiveType, MTLResourceOptions, MTLStoreAction, MTLTextureUsage,
-    MTLVertexStepFunction, MetalDrawableRef, RenderPassDescriptor, RenderPipelineDescriptor,
+    MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLResourceOptions, MTLSamplerAddressMode,
+    MTLSamplerMinMagFilter, MTLSize, MTLStoreAction, MTLTextureUsage, MTLVertexStepFunction,
+    MetalDrawableRef, RenderPassDescriptor, RenderPipelineDescriptor, SamplerDescriptor,
     TextureDescriptor, VertexDescriptor,
 };
+
+use crate::scene_data::{CardInstance, PreparedScene};
 
 const SHADER: &str = r#"
 #include <metal_stdlib>
@@ -19,46 +22,83 @@ struct Uniforms {
     float aspect;
 };
 
-struct VertexIn {
+struct SolidIn {
     float3 position [[attribute(0)]];
     float3 color [[attribute(1)]];
 };
 
-struct VertexOut {
+struct TexIn {
+    float3 position [[attribute(0)]];
+    float2 uv [[attribute(1)]];
+};
+
+struct SolidOut {
     float4 position [[position]];
     float3 color;
 };
 
-vertex VertexOut vertex_main(VertexIn in [[stage_in]],
+struct TexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+float3 rotate_y(float3 p, float a) {
+    float c = cos(a);
+    float s = sin(a);
+    return float3(c * p.x + s * p.z, p.y, -s * p.x + c * p.z);
+}
+
+float4 project(float3 p, constant Uniforms& u) {
+    float3 eye = float3(p.x, p.y + 0.15, p.z - 6.5);
+    float f = 1.0 / tan(0.41421356237);
+    float2 ndc = float2(eye.x * f / u.aspect, eye.y * f) / (-eye.z);
+    float depth = clamp((-eye.z - 0.1) / 99.9, 0.0, 1.0);
+    return float4(ndc, depth, 1.0);
+}
+
+vertex SolidOut solid_vertex(SolidIn in [[stage_in]],
                              constant Uniforms& u [[buffer(1)]]) {
-    float c = cos(u.angle);
-    float s = sin(u.angle);
-    float3 p = float3(
-        c * in.position.x + s * in.position.z,
-        in.position.y + 0.15,
-        -s * in.position.x + c * in.position.z - 6.5
-    );
-
-    float f = 1.0 / tan(0.41421356237); // tan(22.5 deg)
-    float2 ndc = float2(p.x * f / u.aspect, p.y * f) / (-p.z);
-    float depth = clamp((-p.z - 0.1) / 99.9, 0.0, 1.0);
-
-    VertexOut vert;
-    vert.position = float4(ndc, depth, 1.0);
+    SolidOut vert;
+    float3 wp = rotate_y(in.position, u.angle);
+    vert.position = project(wp, u);
     vert.color = in.color;
     return vert;
 }
 
-fragment float4 fragment_main(VertexOut in [[stage_in]]) {
+fragment float4 solid_fragment(SolidOut in [[stage_in]]) {
     return float4(in.color, 1.0);
+}
+
+vertex TexOut tex_vertex(TexIn in [[stage_in]],
+                         constant Uniforms& u [[buffer(1)]]) {
+    TexOut vert;
+    float3 wp = rotate_y(in.position, u.angle);
+    vert.position = project(wp, u);
+    vert.uv = in.uv;
+    return vert;
+}
+
+fragment float4 tex_fragment(TexOut in [[stage_in]],
+                             texture2d<float> atlas [[texture(0)]],
+                             sampler atlas_sm [[sampler(0)]]) {
+    float4 c = atlas.sample(atlas_sm, in.uv);
+    if (c.a < 0.05) { discard_fragment(); }
+    return c;
 }
 "#;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct Vertex {
+struct SolidVertex {
     position: [f32; 3],
     color: [f32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct TexVertex {
+    position: [f32; 3],
+    uv: [f32; 2],
 }
 
 #[repr(C)]
@@ -76,88 +116,164 @@ pub struct SceneState {
 pub struct DrumRenderer {
     device: Device,
     queue: CommandQueue,
-    pipeline: metal::RenderPipelineState,
+    solid_pipeline: metal::RenderPipelineState,
+    tex_pipeline: Option<metal::RenderPipelineState>,
     depth: metal::DepthStencilState,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    index_count: u32,
+    sampler: Option<metal::SamplerState>,
+    drum_vertex_buffer: Buffer,
+    drum_index_buffer: Buffer,
+    drum_index_count: u32,
+    card_vertex_buffer: Option<Buffer>,
+    card_index_buffer: Option<Buffer>,
+    card_index_count: u32,
     uniform_buffer: Buffer,
+    atlas_texture: Option<metal::Texture>,
     depth_texture: Option<metal::Texture>,
     depth_size: (u32, u32),
     state: Arc<Mutex<SceneState>>,
 }
 
 impl DrumRenderer {
-    pub fn new(state: Arc<Mutex<SceneState>>) -> Option<Self> {
+    pub fn new(state: Arc<Mutex<SceneState>>, prepared: Option<&PreparedScene>) -> Option<Self> {
         let device = Device::system_default()?;
         let queue = device.new_command_queue();
 
         let library = device
             .new_library_with_source(SHADER, &CompileOptions::new())
             .ok()?;
-        let vfn = library.get_function("vertex_main", None).ok()?;
-        let ffn = library.get_function("fragment_main", None).ok()?;
+        let solid_vfn = library.get_function("solid_vertex", None).ok()?;
+        let solid_ffn = library.get_function("solid_fragment", None).ok()?;
 
-        let vertex_desc = {
+        let solid_layout = {
             let mut vd = VertexDescriptor::new();
-            let attr0 = vd.attributes().object_at(0).unwrap();
-            attr0.set_format(metal::MTLVertexFormat::Float3);
-            attr0.set_offset(0);
-            attr0.set_buffer_index(0);
-            let attr1 = vd.attributes().object_at(1).unwrap();
-            attr1.set_format(metal::MTLVertexFormat::Float3);
-            attr1.set_offset(12);
-            attr1.set_buffer_index(0);
+            let pos = vd.attributes().object_at(0).unwrap();
+            pos.set_format(metal::MTLVertexFormat::Float3);
+            pos.set_offset(0);
+            pos.set_buffer_index(0);
+            let color = vd.attributes().object_at(1).unwrap();
+            color.set_format(metal::MTLVertexFormat::Float3);
+            color.set_offset(12);
+            color.set_buffer_index(0);
             let layout = vd.layouts().object_at(0).unwrap();
             layout.set_stride(24);
             layout.set_step_function(MTLVertexStepFunction::PerVertex);
             vd
         };
 
-        let pipeline_desc = {
+        let solid_pipeline = {
             let mut d = RenderPipelineDescriptor::new();
-            d.set_vertex_function(Some(&vfn));
-            d.set_fragment_function(Some(&ffn));
-            d.set_vertex_descriptor(Some(&vertex_desc));
+            d.set_vertex_function(Some(&solid_vfn));
+            d.set_fragment_function(Some(&solid_ffn));
+            d.set_vertex_descriptor(Some(&solid_layout));
             d.color_attachments()
                 .object_at(0)
                 .unwrap()
                 .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
             d.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
-            d
+            device.new_render_pipeline_state(&d).ok()?
         };
-        let pipeline = device.new_render_pipeline_state(&pipeline_desc).ok()?;
 
         let depth_desc = metal::DepthStencilDescriptor::new();
         depth_desc.set_depth_compare_function(metal::MTLCompareFunction::Less);
         depth_desc.set_depth_write_enabled(true);
         let depth = device.new_depth_stencil_state(&depth_desc);
 
-        let (vertices, indices) = build_drum_mesh();
-        let vertex_buffer = device.new_buffer_with_data(
-            vertices.as_ptr() as *const _,
-            (vertices.len() * std::mem::size_of::<Vertex>()) as u64,
+        let drum_radius = prepared.map(|p| p.layout.radius).unwrap_or(1.35);
+        let (drum_vertices, drum_indices) = build_drum_mesh(drum_radius);
+        let drum_vertex_buffer = device.new_buffer_with_data(
+            drum_vertices.as_ptr() as *const _,
+            (drum_vertices.len() * std::mem::size_of::<SolidVertex>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
-        let index_buffer = device.new_buffer_with_data(
-            indices.as_ptr() as *const _,
-            (indices.len() * std::mem::size_of::<u16>()) as u64,
+        let drum_index_buffer = device.new_buffer_with_data(
+            drum_indices.as_ptr() as *const _,
+            (drum_indices.len() * std::mem::size_of::<u16>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
+
         let uniform_buffer = device.new_buffer(
             std::mem::size_of::<Uniforms>() as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
+        let mut tex_pipeline = None;
+        let mut sampler = None;
+        let mut card_vertex_buffer = None;
+        let mut card_index_buffer = None;
+        let mut card_index_count = 0;
+        let mut atlas_texture = None;
+
+        if let Some(scene) = prepared {
+            if !scene.cards.is_empty() {
+                let tex_vfn = library.get_function("tex_vertex", None).ok()?;
+                let tex_ffn = library.get_function("tex_fragment", None).ok()?;
+                let tex_layout = {
+                    let mut vd = VertexDescriptor::new();
+                    let pos = vd.attributes().object_at(0).unwrap();
+                    pos.set_format(metal::MTLVertexFormat::Float3);
+                    pos.set_offset(0);
+                    pos.set_buffer_index(0);
+                    let uv = vd.attributes().object_at(1).unwrap();
+                    uv.set_format(metal::MTLVertexFormat::Float2);
+                    uv.set_offset(12);
+                    uv.set_buffer_index(0);
+                    let layout = vd.layouts().object_at(0).unwrap();
+                    layout.set_stride(20);
+                    layout.set_step_function(MTLVertexStepFunction::PerVertex);
+                    vd
+                };
+                tex_pipeline = {
+                    let mut d = RenderPipelineDescriptor::new();
+                    d.set_vertex_function(Some(&tex_vfn));
+                    d.set_fragment_function(Some(&tex_ffn));
+                    d.set_vertex_descriptor(Some(&tex_layout));
+                    d.color_attachments()
+                        .object_at(0)
+                        .unwrap()
+                        .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+                    d.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+                    device.new_render_pipeline_state(&d).ok()
+                };
+
+                let sampler_desc = SamplerDescriptor::new();
+                sampler_desc.set_min_filter(MTLSamplerMinMagFilter::Linear);
+                sampler_desc.set_mag_filter(MTLSamplerMinMagFilter::Linear);
+                sampler_desc.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
+                sampler_desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
+                sampler = Some(device.new_sampler(&sampler_desc));
+
+                let (card_vertices, card_indices) =
+                    build_card_mesh(&scene.cards, CARD_W, CARD_H);
+                card_vertex_buffer = Some(device.new_buffer_with_data(
+                    card_vertices.as_ptr() as *const _,
+                    (card_vertices.len() * std::mem::size_of::<TexVertex>()) as u64,
+                    MTLResourceOptions::StorageModeShared,
+                ));
+                card_index_buffer = Some(device.new_buffer_with_data(
+                    card_indices.as_ptr() as *const _,
+                    (card_indices.len() * std::mem::size_of::<u16>()) as u64,
+                    MTLResourceOptions::StorageModeShared,
+                ));
+                card_index_count = card_indices.len() as u32;
+                atlas_texture = upload_atlas(&device, scene);
+            }
+        }
+
         Some(Self {
             device,
             queue,
-            pipeline,
+            solid_pipeline,
+            tex_pipeline,
             depth,
-            vertex_buffer,
-            index_buffer,
-            index_count: indices.len() as u32,
+            sampler,
+            drum_vertex_buffer,
+            drum_index_buffer,
+            drum_index_count: drum_indices.len() as u32,
+            card_vertex_buffer,
+            card_index_buffer,
+            card_index_count,
             uniform_buffer,
+            atlas_texture,
             depth_texture: None,
             depth_size: (0, 0),
             state,
@@ -208,18 +324,42 @@ impl DrumRenderer {
             znear: 0.0,
             zfar: 1.0,
         });
-        enc.set_render_pipeline_state(&self.pipeline);
         enc.set_depth_stencil_state(&self.depth);
         enc.set_cull_mode(metal::MTLCullMode::None);
-        enc.set_vertex_buffer(0, Some(&self.vertex_buffer), 0);
         enc.set_vertex_buffer(1, Some(&self.uniform_buffer), 0);
+
+        enc.set_render_pipeline_state(&self.solid_pipeline);
+        enc.set_vertex_buffer(0, Some(&self.drum_vertex_buffer), 0);
         enc.draw_indexed_primitives(
             MTLPrimitiveType::Triangle,
-            self.index_count as u64,
+            self.drum_index_count as u64,
             MTLIndexType::UInt16,
-            &self.index_buffer,
+            &self.drum_index_buffer,
             0,
         );
+
+        if self.card_index_count > 0 {
+            if let (Some(tex_pipe), Some(atlas), Some(sampler), Some(vb), Some(ib)) = (
+                self.tex_pipeline.as_ref(),
+                self.atlas_texture.as_ref(),
+                self.sampler.as_ref(),
+                self.card_vertex_buffer.as_ref(),
+                self.card_index_buffer.as_ref(),
+            ) {
+                enc.set_render_pipeline_state(tex_pipe);
+                enc.set_vertex_buffer(0, Some(vb), 0);
+                enc.set_fragment_texture(0, Some(atlas));
+                enc.set_fragment_sampler_state(0, Some(sampler));
+                enc.draw_indexed_primitives(
+                    MTLPrimitiveType::Triangle,
+                    self.card_index_count as u64,
+                    MTLIndexType::UInt16,
+                    ib,
+                    0,
+                );
+            }
+        }
+
         enc.end_encoding();
         cmd.present_drawable(drawable);
         cmd.commit();
@@ -240,10 +380,37 @@ impl DrumRenderer {
     }
 }
 
-fn build_drum_mesh() -> (Vec<Vertex>, Vec<u16>) {
+const CARD_W: f32 = 3.2;
+const CARD_H: f32 = 1.25;
+
+fn upload_atlas(device: &Device, scene: &PreparedScene) -> Option<metal::Texture> {
+    let desc = TextureDescriptor::new();
+    desc.set_width(scene.atlas_width as u64);
+    desc.set_height(scene.atlas_height as u64);
+    desc.set_pixel_format(MTLPixelFormat::RGBA8Unorm);
+    desc.set_usage(MTLTextureUsage::ShaderRead);
+    desc.set_storage_mode(metal::MTLStorageMode::Shared);
+    let tex = device.new_texture(&desc);
+    let region = MTLRegion {
+        origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        size: MTLSize {
+            width: scene.atlas_width as u64,
+            height: scene.atlas_height as u64,
+            depth: 1,
+        },
+    };
+    tex.replace_region(
+        region,
+        0,
+        scene.atlas_rgba.as_ptr() as *const _,
+        (scene.atlas_width * 4) as u64,
+    );
+    Some(tex)
+}
+
+fn build_drum_mesh(radius: f32) -> (Vec<SolidVertex>, Vec<u16>) {
     let segments = 32usize;
     let rows = 8usize;
-    let radius = 1.35f32;
     let half_h = 1.05f32;
     let palette: [[f32; 3]; 6] = [
         [0.95, 0.12, 0.18],
@@ -266,25 +433,79 @@ fn build_drum_mesh() -> (Vec<Vertex>, Vec<u16>) {
             let a1 = ((seg + 1) as f32 / segments as f32) * PI * 2.0;
             let base = vertices.len() as u16;
             vertices.extend_from_slice(&[
-                Vertex {
+                SolidVertex {
                     position: [a0.cos() * radius, y0, a0.sin() * radius],
                     color,
                 },
-                Vertex {
+                SolidVertex {
                     position: [a1.cos() * radius, y0, a1.sin() * radius],
                     color,
                 },
-                Vertex {
+                SolidVertex {
                     position: [a1.cos() * radius, y1, a1.sin() * radius],
                     color,
                 },
-                Vertex {
+                SolidVertex {
                     position: [a0.cos() * radius, y1, a0.sin() * radius],
                     color,
                 },
             ]);
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
+    }
+
+    (vertices, indices)
+}
+
+fn transform_card_point(local: [f32; 3], card: &CardInstance) -> [f32; 3] {
+    let c = card.theta.cos();
+    let s = card.theta.sin();
+    let rx = c * local[0] + s * local[2];
+    let ry = local[1];
+    let rz = -s * local[0] + c * local[2];
+    [rx + card.x, ry + card.y, rz + card.z]
+}
+
+fn build_card_mesh(cards: &[CardInstance], card_w: f32, card_h: f32) -> (Vec<TexVertex>, Vec<u16>) {
+    let hw = card_w * 0.5;
+    let hh = card_h * 0.5;
+    let locals = [
+        [-hw, -hh, 0.0],
+        [hw, -hh, 0.0],
+        [hw, hh, 0.0],
+        [-hw, hh, 0.0],
+    ];
+    let uvs = [
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
+    ];
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for card in cards {
+        let base = vertices.len() as u16;
+        let mut i = 0;
+        while i < 4 {
+            let wp = transform_card_point(locals[i], card);
+            let u = card.u0 + (card.u1 - card.u0) * uvs[i][0];
+            let v = card.v0 + (card.v1 - card.v0) * uvs[i][1];
+            vertices.push(TexVertex {
+                position: wp,
+                uv: [u, v],
+            });
+            i += 1;
+        }
+        indices.extend_from_slice(&[
+            base,
+            base + 1,
+            base + 2,
+            base,
+            base + 2,
+            base + 3,
+        ]);
     }
 
     (vertices, indices)

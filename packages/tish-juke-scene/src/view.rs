@@ -17,11 +17,14 @@ use objc2_ui_kit::{
 };
 
 use tish_apple_common::scene_host::register_scene_view_factory;
+use tishlang_core::ObjectMap;
 
 use crate::renderer::{DrumRenderer, SceneState};
+use crate::scene_data::{parse_scene, PreparedScene};
 
 struct SceneHost {
     state: Arc<Mutex<SceneState>>,
+    prepared: Option<PreparedScene>,
     renderer: RefCell<Option<DrumRenderer>>,
     renderer_failed: RefCell<bool>,
     metal_layer: Retained<CAMetalLayer>,
@@ -164,7 +167,7 @@ impl SceneHost {
             return;
         };
         if self.renderer.borrow().is_none() && !*self.renderer_failed.borrow() {
-            let created = DrumRenderer::new(self.state.clone());
+            let created = DrumRenderer::new(self.state.clone(), self.prepared.as_ref());
             if created.is_none() {
                 *self.renderer_failed.borrow_mut() = true;
             }
@@ -191,7 +194,12 @@ fn create_scene_host_view(
     mtm: MainThreadMarker,
     width: f64,
     height: f64,
+    props: Option<&ObjectMap>,
 ) -> Option<Retained<UIView>> {
+    let prepared = props
+        .and_then(|p| p.get("scene"))
+        .and_then(|scene| parse_scene(scene));
+
     let state = Arc::new(Mutex::new(SceneState {
         angle: 0.0,
         drag_velocity: 0.012,
@@ -228,6 +236,7 @@ fn create_scene_host_view(
 
     let host = SceneHost {
         state: state.clone(),
+        prepared,
         renderer: RefCell::new(None),
         renderer_failed: RefCell::new(false),
         metal_layer,

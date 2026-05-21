@@ -1,4 +1,4 @@
-//! Metal jukebox scene — MTKView drum preview for `<SceneView />`.
+//! Metal jukebox scene — drum preview + optional card instances for `<SceneView />`.
 
 use std::sync::Arc;
 
@@ -6,6 +6,8 @@ use tishlang_core::{ObjectMap, Value};
 
 #[cfg(target_os = "ios")]
 mod renderer;
+#[cfg(target_os = "ios")]
+mod scene_data;
 #[cfg(target_os = "ios")]
 mod view;
 
@@ -25,11 +27,26 @@ pub fn juke_scene_object() -> Value {
         // Scene views are created by the UIKit host via the registered factory.
         Value::Null
     });
+
+    let debug_parse = Value::native(|args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            let scene = args.first().cloned().unwrap_or(Value::Null);
+            return Value::String(scene_data::debug_scene_parse(&scene).into());
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            let _ = args;
+            Value::String("ios only".into())
+        }
+    });
+
     let mut m = ObjectMap::default();
     m.insert(Arc::from("createSceneView"), create);
+    m.insert(Arc::from("debugSceneParse"), debug_parse);
     m.insert(
         Arc::from("version"),
-        Value::String("0.1.0-metal-preview".into()),
+        Value::String("0.2.0-scene-port".into()),
     );
     Value::object(m)
 }
