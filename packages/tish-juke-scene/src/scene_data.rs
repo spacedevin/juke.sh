@@ -16,6 +16,10 @@ pub struct SceneLayout {
 
 #[derive(Clone, Debug)]
 pub struct CardInstance {
+    pub index: usize,
+    pub c: u32,
+    pub r: u32,
+    pub title: String,
     pub x: f32,
     pub y: f32,
     pub z: f32,
@@ -96,7 +100,7 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
     let mut atlas = vec![0u8; (atlas_w * atlas_h * 4) as usize];
     let mut cards = Vec::new();
 
-    for cell in cells.iter() {
+    for (index, cell) in cells.iter().enumerate() {
         let Value::Object(cell_obj) = cell else {
             continue;
         };
@@ -137,8 +141,17 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
         let y = num_field(cm, "y").unwrap_or(0.0) as f32;
         let z = num_field(cm, "z").unwrap_or(radius as f64) as f32;
         let theta = num_field(cm, "theta").unwrap_or(0.0) as f32;
+        let title = cm
+            .get("titleA")
+            .or_else(|| cm.get("title"))
+            .map(|v| v.to_display_string())
+            .unwrap_or_default();
 
         cards.push(CardInstance {
+            index,
+            c,
+            r,
+            title,
             x,
             y,
             z,

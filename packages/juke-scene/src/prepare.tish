@@ -33,6 +33,8 @@ export fn stepSceneBuilder(builder, batchSize) {
         z: slot.z,
         theta: slot.theta,
         canvas: art.canvas,
+        titleA: song.titleA,
+        artist: song.artist,
       })
     }
     i = i + 1

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use tishlang_core::{ObjectMap, Value};
 
 #[cfg(target_os = "ios")]
+mod hit_test;
+#[cfg(target_os = "ios")]
 mod renderer;
 #[cfg(target_os = "ios")]
 mod scene_data;
@@ -46,7 +48,7 @@ pub fn juke_scene_object() -> Value {
     m.insert(Arc::from("debugSceneParse"), debug_parse);
     m.insert(
         Arc::from("version"),
-        Value::String("0.2.0-scene-port".into()),
+        Value::String("0.3.0-scene-port".into()),
     );
     Value::object(m)
 }

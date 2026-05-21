@@ -118,6 +118,9 @@ pub struct SceneState {
     pub spin: f32,
     pub cols: u32,
     pub zoom: f32,
+    pub active_index: Option<usize>,
+    pub angle_target: Option<f32>,
+    pub zoom_target: Option<f32>,
 }
 
 pub struct DrumRenderer {
@@ -399,8 +402,8 @@ impl DrumRenderer {
 
 const CARD_W: f32 = 3.2;
 const CARD_GAP: f32 = 0.3;
-const CARD_H: f32 = 1.25;
-const CARD_SURFACE_PUSH: f32 = 0.08;
+pub(crate) const CARD_H: f32 = 1.25;
+pub(crate) const CARD_SURFACE_PUSH: f32 = 0.08;
 const PREVIEW_COLS: u32 = 1;
 
 fn default_drum_radius(cols: u32) -> f32 {
@@ -411,12 +414,12 @@ fn default_drum_half_h(rows: u32) -> f32 {
     ((rows as f32 * 1.4) + 0.6) * 0.5
 }
 
-fn slot_card_width(cols: u32, radius: f32) -> f32 {
+pub(crate) fn slot_card_width(cols: u32, radius: f32) -> f32 {
     let arc = (2.0 * PI * radius) / cols.max(1) as f32;
     CARD_W.min(arc * 0.92)
 }
 
-fn camera_distance(radius: f32) -> f32 {
+pub(crate) fn camera_distance(radius: f32) -> f32 {
     let base = default_drum_radius(PREVIEW_COLS).max(0.5);
     6.5 * (radius / base).max(0.35)
 }

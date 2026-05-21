@@ -19,7 +19,7 @@ import {
 import { generateCardArt } from "@spacedevin/juke-cards"
 
 const SCENE_SEED = 42
-const PREPARE_BATCH = 3
+const PREPARE_BATCH = 6
 const DEBUG_TRACKS = 60
 let debugTracks = generateDebugTracks(DEBUG_TRACKS)
 
@@ -28,6 +28,7 @@ fn App() {
   let [scene, setScene] = useState(null)
   let [builder, setBuilder] = useState(null)
   let [spin, setSpin] = useState(0.35)
+  let [activeIdx, setActiveIdx] = useState(-1)
   let loggedIn = isLoggedIn()
   let song = debugTracks[tick % debugTracks.length]
   let art = useMemo(() => generateCardArt(song), [tick])
@@ -55,6 +56,7 @@ fn App() {
       return
     }
     setScene(null)
+    setActiveIdx(-1)
     setTimeout(() => {
       setBuilder(createSceneBuilder(debugTracks, DEFAULT_ROWS, SCENE_SEED))
     }, 0)
@@ -76,6 +78,16 @@ fn App() {
     setSpin(n)
   }
 
+  let activeLabel = "none"
+  if (activeIdx >= 0 && scene !== null && scene.cells !== null) {
+    let cell = scene.cells[activeIdx]
+    if (cell !== null && cell.titleA) {
+      activeLabel = cell.titleA
+    } else {
+      activeLabel = "#" + activeIdx
+    }
+  }
+
   let metalDebug = scene === null ? "tap Load scene" : debugSceneParse(scene)
   let prepareProgress = builder !== null ? builderProgress(builder) : null
   let sceneLabel = prepareProgress !== null
@@ -90,9 +102,15 @@ fn App() {
       <h1>juke.sh</h1>
       <p>{"Spotify: " + (loggedIn ? "logged in" : "not logged in")}</p>
       <p>{"Scene: " + sceneVersion + " (" + sceneLabel + ")"}</p>
+      <p>{"Active: " + activeLabel + " (tap a card)"}</p>
       <p>{"Metal: " + metalDebug}</p>
       <CardArt art={art} height={100} />
-      <SceneView height={280} scene={scene} spin={spin} />
+      <SceneView
+        height={280}
+        scene={scene}
+        spin={spin}
+        onCardSelect={(idx) => setActiveIdx(idx)}
+      />
       <button onClick={() => loadScene()}>{loadLabel}</button>
       <button onClick={() => refreshCard()}>
         {"Refresh card (" + tick + ")"}
