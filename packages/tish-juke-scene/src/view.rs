@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
 
+use block2::RcBlock;
+use dispatch2::DispatchQueue;
 use metal::{foreign_types::ForeignTypeRef, MetalLayerRef};
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -70,8 +72,14 @@ fn select_card_at(
             s.zoom_target = Some(1.0);
         }
     }
-    if let Some(Value::Function(f)) = on_select {
-        let _ = f(&[Value::Number(idx as f64)]);
+    if let Some(Value::Function(f)) = on_select.clone() {
+        let idx = idx as f64;
+        let block = RcBlock::new(move || {
+            let _ = f(&[Value::Number(idx)]);
+        });
+        unsafe {
+            DispatchQueue::main().exec_async_with_block(RcBlock::as_ptr(&block).cast());
+        }
     }
 }
 
@@ -207,12 +215,13 @@ define_class!(
                     let Some(prepared) = self.ivars().prepared.borrow().clone() else {
                         return;
                     };
+                    let on_select = self.ivars().on_select.borrow().clone();
                     let loc = pan.locationInView(Some(&*view));
                     let bounds = view.bounds();
                     select_card_at(
                         &state,
                         &prepared,
-                        &self.ivars().on_select.borrow(),
+                        &on_select,
                         loc.x as f32,
                         loc.y as f32,
                         bounds.size.width as f32,
@@ -325,6 +334,9 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
     view.setFrame(frame);
     sync_metal_layer(view);
 
+    *view.ivars().pan_target.ivars().prepared.borrow_mut() = prepared.clone();
+    *view.ivars().pan_target.ivars().on_select.borrow_mut() = on_select.clone();
+
     let mut host_slot = view.ivars().host.borrow_mut();
     let Some(host) = host_slot.as_mut() else {
         return;
@@ -334,11 +346,12 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
     let new_cards = prepared.as_ref().map(|p| p.cards.len()).unwrap_or(0);
     let scene_changed = old_cards != new_cards;
 
-    host.prepared = prepared.clone();
+    host.prepared = prepared;
     if scene_changed {
         host.reset_renderer();
-        let cols = prepared.as_ref().map(|p| p.layout.cols).unwrap_or(1);
-        let init_angle = prepared
+        let cols = host.prepared.as_ref().map(|p| p.layout.cols).unwrap_or(1);
+        let init_angle = host
+            .prepared
             .as_ref()
             .and_then(|p| p.cards.first())
             .map(|c| PI - c.theta)
@@ -356,9 +369,6 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
         let mut s = host.state.lock().unwrap();
         s.spin = spin;
     }
-
-    *view.ivars().pan_target.ivars().prepared.borrow_mut() = prepared;
-    *view.ivars().pan_target.ivars().on_select.borrow_mut() = on_select;
 }
 
 fn start_display_link(_mtm: MainThreadMarker, view: &JukeSceneHostView) {

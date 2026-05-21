@@ -27,3 +27,5 @@ objc2-quartz-core = { version = "0.3", default-features = true, features = [
     "objc2-metal",
 ] }
 objc2-core-foundation = { version = "0.3", default-features = true, features = ["CFCGTypes"] }
+block2 = "0.6"
+dispatch2 = { version = "0.3", features = ["block2"] }
