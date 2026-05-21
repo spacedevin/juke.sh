@@ -5,7 +5,7 @@
 import { ios, useState, useEffect, useMemo } from "tish:ios"
 import { setTimeout, clearTimeout } from "tish:timers"
 import { isLoggedIn } from "tish:spotify-ios"
-import { debugSceneParse, version as sceneVersion } from "tish:juke-scene"
+import { version as sceneVersion } from "tish:juke-scene"
 import {
   generateDebugTracks,
   DEFAULT_ROWS,
@@ -16,7 +16,6 @@ import {
   sceneFromBuilder,
   builderProgress,
 } from "@spacedevin/juke-scene"
-import { generateCardArt } from "@spacedevin/juke-cards"
 
 const SCENE_SEED = 42
 const PREPARE_BATCH = 6
@@ -24,14 +23,12 @@ const DEBUG_TRACKS = 60
 let debugTracks = generateDebugTracks(DEBUG_TRACKS)
 
 fn App() {
-  let [tick, setTick] = useState(0)
   let [scene, setScene] = useState(null)
   let [builder, setBuilder] = useState(null)
   let [spin, setSpin] = useState(0.35)
   let [activeIdx, setActiveIdx] = useState(-1)
+  let [queued, setQueued] = useState({})
   let loggedIn = isLoggedIn()
-  let song = debugTracks[tick % debugTracks.length]
-  let art = useMemo(() => generateCardArt(song), [tick])
 
   let prepareKey = builder === null ? -1 : builder.slotIndex
 
@@ -57,13 +54,10 @@ fn App() {
     }
     setScene(null)
     setActiveIdx(-1)
+    setQueued({})
     setTimeout(() => {
       setBuilder(createSceneBuilder(debugTracks, DEFAULT_ROWS, SCENE_SEED))
     }, 0)
-  }
-
-  fn refreshCard() {
-    setTick(tick + 1)
   }
 
   fn spinDown() {
@@ -78,7 +72,22 @@ fn App() {
     setSpin(n)
   }
 
-  let activeLabel = "none"
+  fn spinOff() {
+    setSpin(0)
+  }
+
+  fn queuedIndices() {
+    let out = []
+    let keys = Object.keys(queued)
+    let i = 0
+    while (i < keys.length) {
+      if (queued[keys[i]]) { out.push(parseInt(keys[i])) }
+      i = i + 1
+    }
+    return out
+  }
+
+  let activeLabel = "—"
   if (activeIdx >= 0 && scene !== null && scene.cells !== null) {
     let cell = scene.cells[activeIdx]
     if (cell !== null && cell.titleA) {
@@ -88,35 +97,60 @@ fn App() {
     }
   }
 
-  let metalDebug = scene === null ? "tap Load scene" : debugSceneParse(scene)
   let prepareProgress = builder !== null ? builderProgress(builder) : null
   let sceneLabel = prepareProgress !== null
-    ? ("Preparing " + prepareProgress.cards + "/" + prepareProgress.tracks + " cards…")
+    ? ("prep " + prepareProgress.cards + "/" + prepareProgress.tracks)
     : (scene === null
-      ? "drum preview"
-      : (scene.cols + "x" + scene.rows + ", " + scene.cells.length + " cards"))
-  let loadLabel = builder !== null ? "Preparing…" : (scene === null ? "Load scene" : "Reload scene")
+      ? "no scene"
+      : (scene.cols + "x" + scene.rows + " · " + scene.cells.length + " cards"))
+  let loadLabel = builder !== null ? "Preparing…" : (scene === null ? "Load scene" : "Reload")
+
+  let statusLine = "juke.sh · " + sceneVersion + " · " + sceneLabel
+    + " · Active: " + activeLabel
+    + " · Queued: " + queuedIndices().length
+    + " · Spin: " + spin
+    + " · Spotify: " + (loggedIn ? "in" : "out")
 
   return (
     <div>
-      <h1>juke.sh</h1>
-      <p>{"Spotify: " + (loggedIn ? "logged in" : "not logged in")}</p>
-      <p>{"Scene: " + sceneVersion + " (" + sceneLabel + ")"}</p>
-      <p>{"Active: " + activeLabel + " (tap a card)"}</p>
-      <p>{"Metal: " + metalDebug}</p>
-      <CardArt art={art} height={100} />
+      <p>{statusLine}</p>
       <SceneView
-        height={280}
+        height={420}
         scene={scene}
         spin={spin}
-        onCardSelect={(idx) => setActiveIdx(idx)}
+        queued={queuedIndices()}
+        onCardSelect={(idx) => {
+          setActiveIdx(idx)
+          let next = {}
+          let keys = Object.keys(queued)
+          let i = 0
+          while (i < keys.length) {
+            let k = parseInt(keys[i])
+            if (k !== idx && queued[k]) { next[k] = true }
+            i = i + 1
+          }
+          setQueued(next)
+        }}
+        onCardQueue={(idx) => {
+          let on = queued[idx] !== true
+          let next = {}
+          let keys = Object.keys(queued)
+          let i = 0
+          while (i < keys.length) {
+            let k = parseInt(keys[i])
+            if (k !== idx && queued[k]) { next[k] = true }
+            i = i + 1
+          }
+          if (on) { next[idx] = true }
+          setQueued(next)
+        }}
       />
-      <button onClick={() => loadScene()}>{loadLabel}</button>
-      <button onClick={() => refreshCard()}>
-        {"Refresh card (" + tick + ")"}
-      </button>
-      <button onClick={() => spinDown()}>{"Spin −"}</button>
-      <button onClick={() => spinUp()}>{"Spin + (" + spin + ")"}</button>
+      <row>
+        <button onClick={() => loadScene()}>{loadLabel}</button>
+        <button onClick={() => spinOff()}>Spin off</button>
+        <button onClick={() => spinDown()}>Spin −</button>
+        <button onClick={() => spinUp()}>Spin +</button>
+      </row>
     </div>
   )
 }

@@ -21,7 +21,13 @@ struct Uniforms {
     float angle;
     float aspect;
     float cam_dist;
-    float _pad;
+    float active_index;
+};
+
+struct CardUniforms {
+    uint queued_lo;
+    uint queued_hi;
+    uint2 _pad;
 };
 
 struct SolidIn {
@@ -32,6 +38,8 @@ struct SolidIn {
 struct TexIn {
     float3 position [[attribute(0)]];
     float2 uv [[attribute(1)]];
+    float card_index [[attribute(2)]];
+    float2 local_uv [[attribute(3)]];
 };
 
 struct SolidOut {
@@ -42,6 +50,8 @@ struct SolidOut {
 struct TexOut {
     float4 position [[position]];
     float2 uv;
+    float card_index;
+    float2 local_uv;
 };
 
 float3 rotate_y(float3 p, float a) {
@@ -56,6 +66,12 @@ float4 project(float3 p, constant Uniforms& u) {
     float2 ndc = float2(eye.x * f / u.aspect, eye.y * f) / (-eye.z);
     float depth = clamp((-eye.z - 0.1) / 99.9, 0.0, 1.0);
     return float4(ndc, depth, 1.0);
+}
+
+bool card_is_queued(int idx, constant CardUniforms& cu) {
+    if (idx < 0 || idx >= 64) { return false; }
+    uint bit = idx < 32 ? ((cu.queued_lo >> idx) & 1u) : ((cu.queued_hi >> (idx - 32)) & 1u);
+    return bit != 0u;
 }
 
 vertex SolidOut solid_vertex(SolidIn in [[stage_in]],
@@ -77,14 +93,32 @@ vertex TexOut tex_vertex(TexIn in [[stage_in]],
     float3 wp = rotate_y(in.position, u.angle);
     vert.position = project(wp, u);
     vert.uv = in.uv;
+    vert.card_index = in.card_index;
+    vert.local_uv = in.local_uv;
     return vert;
 }
 
 fragment float4 tex_fragment(TexOut in [[stage_in]],
+                             constant Uniforms& u [[buffer(1)]],
+                             constant CardUniforms& cu [[buffer(2)]],
                              texture2d<float> atlas [[texture(0)]],
                              sampler atlas_sm [[sampler(0)]]) {
     float4 c = atlas.sample(atlas_sm, in.uv);
     if (c.a < 0.05) { discard_fragment(); }
+    int idx = int(in.card_index + 0.5);
+    bool is_active = u.active_index >= 0.0 && abs(in.card_index - u.active_index) < 0.5;
+    bool is_queued = card_is_queued(idx, cu);
+    float glow = 0.0;
+    if (is_queued) {
+        glow = smoothstep(0.72, 1.0, in.local_uv.y) * 0.85;
+    }
+    if (is_active) {
+        float edge = min(min(in.local_uv.x, 1.0 - in.local_uv.x),
+                         min(in.local_uv.y, 1.0 - in.local_uv.y));
+        glow = max(glow, smoothstep(0.05, 0.0, edge) * 0.55);
+    }
+    float3 cyan = float3(0.0, 0.95, 1.0);
+    c.rgb = mix(c.rgb, cyan, glow);
     return c;
 }
 "#;
@@ -101,6 +135,8 @@ struct SolidVertex {
 struct TexVertex {
     position: [f32; 3],
     uv: [f32; 2],
+    card_index: f32,
+    local_uv: [f32; 2],
 }
 
 #[repr(C)]
@@ -109,7 +145,15 @@ struct Uniforms {
     angle: f32,
     aspect: f32,
     cam_dist: f32,
-    _pad: f32,
+    active_index: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CardUniforms {
+    queued_lo: u32,
+    queued_hi: u32,
+    _pad: [u32; 2],
 }
 
 pub struct SceneState {
@@ -121,6 +165,8 @@ pub struct SceneState {
     pub active_index: Option<usize>,
     pub angle_target: Option<f32>,
     pub zoom_target: Option<f32>,
+    pub queued_bits: u64,
+    pub touch_active: bool,
 }
 
 pub struct DrumRenderer {
@@ -137,6 +183,7 @@ pub struct DrumRenderer {
     card_index_buffer: Option<Buffer>,
     card_index_count: u32,
     uniform_buffer: Buffer,
+    card_uniform_buffer: Buffer,
     atlas_texture: Option<metal::Texture>,
     depth_texture: Option<metal::Texture>,
     depth_size: (u32, u32),
@@ -212,6 +259,10 @@ impl DrumRenderer {
             std::mem::size_of::<Uniforms>() as u64,
             MTLResourceOptions::StorageModeShared,
         );
+        let card_uniform_buffer = device.new_buffer(
+            std::mem::size_of::<CardUniforms>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
 
         let mut tex_pipeline = None;
         let mut sampler = None;
@@ -234,8 +285,16 @@ impl DrumRenderer {
                     uv.set_format(metal::MTLVertexFormat::Float2);
                     uv.set_offset(12);
                     uv.set_buffer_index(0);
+                    let card_idx = vd.attributes().object_at(2).unwrap();
+                    card_idx.set_format(metal::MTLVertexFormat::Float);
+                    card_idx.set_offset(20);
+                    card_idx.set_buffer_index(0);
+                    let local_uv = vd.attributes().object_at(3).unwrap();
+                    local_uv.set_format(metal::MTLVertexFormat::Float2);
+                    local_uv.set_offset(24);
+                    local_uv.set_buffer_index(0);
                     let layout = vd.layouts().object_at(0).unwrap();
-                    layout.set_stride(20);
+                    layout.set_stride(32);
                     layout.set_step_function(MTLVertexStepFunction::PerVertex);
                     vd
                 };
@@ -291,6 +350,7 @@ impl DrumRenderer {
             card_index_buffer,
             card_index_count,
             uniform_buffer,
+            card_uniform_buffer,
             atlas_texture,
             depth_texture: None,
             depth_size: (0, 0),
@@ -306,15 +366,24 @@ impl DrumRenderer {
         {
             let s = self.state.lock().unwrap();
             let cam_dist = self.base_cam_dist * (1.0 - s.zoom * 0.55).max(0.4);
+            let active_index = s
+                .active_index
+                .map(|i| i as f32)
+                .unwrap_or(-1.0);
             let u = Uniforms {
                 angle: s.angle,
                 aspect: width / height.max(1.0),
                 cam_dist,
-                _pad: 0.0,
+                active_index,
             };
-            let ptr = self.uniform_buffer.contents() as *mut Uniforms;
+            let cu = CardUniforms {
+                queued_lo: s.queued_bits as u32,
+                queued_hi: (s.queued_bits >> 32) as u32,
+                _pad: [0, 0],
+            };
             unsafe {
-                *ptr = u;
+                *(self.uniform_buffer.contents() as *mut Uniforms) = u;
+                *(self.card_uniform_buffer.contents() as *mut CardUniforms) = cu;
             }
         }
 
@@ -368,6 +437,8 @@ impl DrumRenderer {
             ) {
                 enc.set_render_pipeline_state(tex_pipe);
                 enc.set_vertex_buffer(0, Some(vb), 0);
+                enc.set_fragment_buffer(1, Some(&self.uniform_buffer), 0);
+                enc.set_fragment_buffer(2, Some(&self.card_uniform_buffer), 0);
                 enc.set_fragment_texture(0, Some(atlas));
                 enc.set_fragment_sampler_state(0, Some(sampler));
                 enc.draw_indexed_primitives(
@@ -534,14 +605,19 @@ fn build_card_mesh(cards: &[CardInstance], card_w: f32, card_h: f32) -> (Vec<Tex
 
     for card in cards {
         let base = vertices.len() as u16;
+        let card_index = card.index as f32;
         let mut i = 0;
         while i < 4 {
             let wp = transform_card_point(locals[i], card);
-            let u = card.u0 + (card.u1 - card.u0) * uvs[i][0];
-            let v = card.v0 + (card.v1 - card.v0) * uvs[i][1];
+            let lu = uvs[i][0];
+            let lv = uvs[i][1];
+            let u = card.u0 + (card.u1 - card.u0) * lu;
+            let v = card.v0 + (card.v1 - card.v0) * lv;
             vertices.push(TexVertex {
                 position: wp,
                 uv: [u, v],
+                card_index,
+                local_uv: [lu, lv],
             });
             i += 1;
         }

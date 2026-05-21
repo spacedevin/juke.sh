@@ -57,6 +57,43 @@ fn project_point(
     Some((sx, sy, -eye_z))
 }
 
+fn cross_2d(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    ax * by - ay * bx
+}
+
+fn point_in_tri(px: f32, py: f32, a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> bool {
+    let same = |p: (f32, f32), u: (f32, f32), v: (f32, f32), w: (f32, f32)| {
+        cross_2d(v.0 - u.0, v.1 - u.1, w.0 - u.0, w.1 - u.1)
+            * cross_2d(v.0 - u.0, v.1 - u.1, p.0 - u.0, p.1 - u.1)
+            >= 0.0
+    };
+    same((px, py), a, b, c) && same((px, py), b, c, a) && same((px, py), c, a, b)
+}
+
+fn point_in_quad(px: f32, py: f32, q: &[(f32, f32); 4]) -> bool {
+    point_in_tri(px, py, q[0], q[1], q[2]) || point_in_tri(px, py, q[0], q[2], q[3])
+}
+
+fn project_card_quad(
+    card: &CardInstance,
+    corners: &[[f32; 3]; 4],
+    angle: f32,
+    cam_dist: f32,
+    aspect: f32,
+    view_w: f32,
+    view_h: f32,
+) -> Option<([(f32, f32); 4], f32)> {
+    let mut screen = [(0.0, 0.0); 4];
+    let mut depth = f32::INFINITY;
+    for (i, local) in corners.iter().enumerate() {
+        let world = transform_corner(*local, card);
+        let (sx, sy, d) = project_point(world, angle, cam_dist, aspect, view_w, view_h)?;
+        screen[i] = (sx, sy);
+        depth = depth.min(d);
+    }
+    Some((screen, depth))
+}
+
 /// Pick the front-most card under a UIKit tap point (top-left origin, points).
 pub fn pick_card_at_point(
     scene: &PreparedScene,
@@ -85,33 +122,17 @@ pub fn pick_card_at_point(
 
     let mut best: Option<(usize, f32)> = None;
     for card in &scene.cards {
-        let mut min_x = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
-        let mut depth = f32::INFINITY;
-        let mut any = false;
-        for local in corners {
-            let world = transform_corner(local, card);
-            let Some((sx, sy, d)) = project_point(world, angle, cam_dist, aspect, view_w, view_h)
-            else {
-                continue;
-            };
-            any = true;
-            min_x = min_x.min(sx);
-            max_x = max_x.max(sx);
-            min_y = min_y.min(sy);
-            max_y = max_y.max(sy);
-            depth = depth.min(d);
-        }
-        if !any {
+        let Some((quad, depth)) =
+            project_card_quad(card, &corners, angle, cam_dist, aspect, view_w, view_h)
+        else {
+            continue;
+        };
+        if !point_in_quad(tap_x, tap_y, &quad) {
             continue;
         }
-        if tap_x >= min_x && tap_x <= max_x && tap_y >= min_y && tap_y <= max_y {
-            let dominated = best.map(|(_, bd)| depth >= bd).unwrap_or(false);
-            if !dominated {
-                best = Some((card.index, depth));
-            }
+        let dominated = best.map(|(_, bd)| depth >= bd).unwrap_or(false);
+        if !dominated {
+            best = Some((card.index, depth));
         }
     }
     best.map(|(i, _)| i)

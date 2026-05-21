@@ -16,7 +16,8 @@ use objc2_metal::MTLCreateSystemDefaultDevice;
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CADisplayLink, CAMetalLayer};
 use objc2_ui_kit::{
-    UIColor, UIGestureRecognizerState, UIPanGestureRecognizer, UIView, UIViewAutoresizing,
+    UIColor, UIGestureRecognizerState, UILongPressGestureRecognizer, UIPanGestureRecognizer,
+    UITapGestureRecognizer, UIView, UIViewAutoresizing,
 };
 
 use tish_apple_common::scene_host::register_scene_view_factory;
@@ -26,8 +27,9 @@ use crate::hit_test::{go_to_card_angle, pick_card_at_point};
 use crate::renderer::{DrumRenderer, SceneState};
 use crate::scene_data::{parse_scene, PreparedScene};
 
-const TAP_DRAG_THRESHOLD: f32 = 14.0;
+const TAP_DRAG_THRESHOLD: f32 = 24.0;
 const ZOOM_AUTO_THRESHOLD: f32 = 0.5;
+const LONG_PRESS_SECONDS: f64 = 0.35;
 
 thread_local! {
     static CACHED_SCENE_VIEW: RefCell<Option<Retained<JukeSceneHostView>>> = RefCell::new(None);
@@ -44,6 +46,66 @@ fn shortest_angle_diff(from: f32, to: f32) -> f32 {
     diff
 }
 
+fn dispatch_value_callback(callback: Value, args: Vec<Value>) {
+    let Value::Function(f) = callback else {
+        return;
+    };
+    let block = RcBlock::new(move || {
+        let _ = f(&args);
+    });
+    unsafe {
+        DispatchQueue::main().exec_async_with_block(RcBlock::as_ptr(&block).cast());
+    }
+}
+
+fn parse_queued_bits(props: Option<&ObjectMap>) -> u64 {
+    let Some(p) = props else {
+        return 0;
+    };
+    let Some(v) = p
+        .get("queued")
+        .or_else(|| p.get("queuedIndices"))
+        .or_else(|| p.get("queuedindices"))
+    else {
+        return 0;
+    };
+    match v {
+        Value::Number(n) => *n as u64,
+        Value::Array(arr) => {
+            let a = arr.borrow();
+            let mut bits = 0u64;
+            for item in a.iter() {
+                if let Some(idx) = item.as_number() {
+                    let i = idx as u32;
+                    if i < 64 {
+                        bits |= 1u64 << i;
+                    }
+                }
+            }
+            bits
+        }
+        _ => 0,
+    }
+}
+
+fn pick_angle_zoom(state: &Arc<Mutex<SceneState>>) -> (f32, f32) {
+    let s = state.lock().unwrap();
+    (s.angle, s.zoom)
+}
+
+fn begin_touch(state: &Arc<Mutex<SceneState>>) {
+    let mut s = state.lock().unwrap();
+    s.touch_active = true;
+    s.angle_target = None;
+    s.zoom_target = None;
+    s.drag_velocity = 0.0;
+}
+
+fn end_touch(state: &Arc<Mutex<SceneState>>) {
+    let mut s = state.lock().unwrap();
+    s.touch_active = false;
+}
+
 fn select_card_at(
     state: &Arc<Mutex<SceneState>>,
     prepared: &PreparedScene,
@@ -53,10 +115,7 @@ fn select_card_at(
     view_w: f32,
     view_h: f32,
 ) {
-    let (angle, zoom) = {
-        let s = state.lock().unwrap();
-        (s.angle, s.zoom)
-    };
+    let (angle, zoom) = pick_angle_zoom(state);
     let Some(idx) = pick_card_at_point(prepared, angle, zoom, tap_x, tap_y, view_w, view_h) else {
         return;
     };
@@ -72,14 +131,30 @@ fn select_card_at(
             s.zoom_target = Some(1.0);
         }
     }
-    if let Some(Value::Function(f)) = on_select.clone() {
-        let idx = idx as f64;
-        let block = RcBlock::new(move || {
-            let _ = f(&[Value::Number(idx)]);
-        });
-        unsafe {
-            DispatchQueue::main().exec_async_with_block(RcBlock::as_ptr(&block).cast());
-        }
+    if let Some(cb) = on_select.clone() {
+        dispatch_value_callback(cb, vec![Value::Number(idx as f64)]);
+    }
+}
+
+fn queue_card_at(
+    state: &Arc<Mutex<SceneState>>,
+    prepared: &PreparedScene,
+    on_queue: &Option<Value>,
+    tap_x: f32,
+    tap_y: f32,
+    view_w: f32,
+    view_h: f32,
+) {
+    let (angle, zoom) = pick_angle_zoom(state);
+    let active = state.lock().unwrap().active_index;
+    let Some(idx) = pick_card_at_point(prepared, angle, zoom, tap_x, tap_y, view_w, view_h) else {
+        return;
+    };
+    if active == Some(idx) {
+        return;
+    }
+    if let Some(cb) = on_queue.clone() {
+        dispatch_value_callback(cb, vec![Value::Number(idx as f64)]);
     }
 }
 
@@ -155,6 +230,10 @@ pub struct PanIvars {
     pub state: Arc<Mutex<SceneState>>,
     pub prepared: RefCell<Option<PreparedScene>>,
     pub on_select: RefCell<Option<Value>>,
+    pub on_queue: RefCell<Option<Value>>,
+    pub long_press_fired: RefCell<bool>,
+    pub drag_occurred: RefCell<bool>,
+    pub touch_start: RefCell<(f32, f32)>,
     pub view: RefCell<Option<Retained<JukeSceneHostView>>>,
 }
 
@@ -179,11 +258,28 @@ define_class!(
             let state = self.ivars().state.clone();
             match pan.state() {
                 UIGestureRecognizerState::Began => {
-                    let mut s = state.lock().unwrap();
-                    s.angle_target = None;
-                    s.zoom_target = None;
+                    *self.ivars().long_press_fired.borrow_mut() = false;
+                    *self.ivars().drag_occurred.borrow_mut() = false;
+                    if let Some(view) = self.ivars().view.borrow().clone() {
+                        let loc = pan.locationInView(Some(&*view));
+                        *self.ivars().touch_start.borrow_mut() =
+                            (loc.x as f32, loc.y as f32);
+                    }
+                    begin_touch(&state);
                 }
                 UIGestureRecognizerState::Changed => {
+                    let view_opt = self.ivars().view.borrow().clone();
+                    let Some(view) = view_opt else {
+                        return;
+                    };
+                    let loc = pan.locationInView(Some(&*view));
+                    let (sx, sy) = *self.ivars().touch_start.borrow();
+                    let mx = loc.x as f32 - sx;
+                    let my = loc.y as f32 - sy;
+                    if (mx * mx + my * my).sqrt() <= TAP_DRAG_THRESHOLD {
+                        return;
+                    }
+                    *self.ivars().drag_occurred.borrow_mut() = true;
                     let t = pan.translationInView(None);
                     let dx = t.x as f32;
                     let dy = t.y as f32;
@@ -202,34 +298,82 @@ define_class!(
                     }
                 }
                 UIGestureRecognizerState::Ended | UIGestureRecognizerState::Cancelled => {
-                    let t = pan.translationInView(None);
-                    let dx = t.x as f32;
-                    let dy = t.y as f32;
-                    if (dx * dx + dy * dy).sqrt() > TAP_DRAG_THRESHOLD {
-                        return;
-                    }
-                    let view_opt = self.ivars().view.borrow().clone();
-                    let Some(view) = view_opt else {
-                        return;
-                    };
-                    let Some(prepared) = self.ivars().prepared.borrow().clone() else {
-                        return;
-                    };
-                    let on_select = self.ivars().on_select.borrow().clone();
-                    let loc = pan.locationInView(Some(&*view));
-                    let bounds = view.bounds();
-                    select_card_at(
-                        &state,
-                        &prepared,
-                        &on_select,
-                        loc.x as f32,
-                        loc.y as f32,
-                        bounds.size.width as f32,
-                        bounds.size.height as f32,
-                    );
+                    end_touch(&state);
                 }
                 _ => {}
             }
+        }
+
+        #[unsafe(method(handleTap:))]
+        fn handle_tap(&self, recognizer: Option<&AnyObject>) {
+            let Some(rec) = recognizer else {
+                return;
+            };
+            let Some(tap) = rec.downcast_ref::<UITapGestureRecognizer>() else {
+                return;
+            };
+            if *self.ivars().long_press_fired.borrow() {
+                *self.ivars().long_press_fired.borrow_mut() = false;
+                return;
+            }
+            if *self.ivars().drag_occurred.borrow() {
+                return;
+            }
+            let state = self.ivars().state.clone();
+            let view_opt = self.ivars().view.borrow().clone();
+            let Some(view) = view_opt else {
+                return;
+            };
+            let Some(prepared) = self.ivars().prepared.borrow().clone() else {
+                return;
+            };
+            let on_select = self.ivars().on_select.borrow().clone();
+            let loc = tap.locationInView(Some(&*view));
+            let bounds = view.bounds();
+            select_card_at(
+                &state,
+                &prepared,
+                &on_select,
+                loc.x as f32,
+                loc.y as f32,
+                bounds.size.width as f32,
+                bounds.size.height as f32,
+            );
+            end_touch(&state);
+        }
+
+        #[unsafe(method(handleLongPress:))]
+        fn handle_long_press(&self, recognizer: Option<&AnyObject>) {
+            let Some(rec) = recognizer else {
+                return;
+            };
+            let Some(long) = rec.downcast_ref::<UILongPressGestureRecognizer>() else {
+                return;
+            };
+            if long.state() != UIGestureRecognizerState::Began {
+                return;
+            }
+            let state = self.ivars().state.clone();
+            let view_opt = self.ivars().view.borrow().clone();
+            let Some(view) = view_opt else {
+                return;
+            };
+            let Some(prepared) = self.ivars().prepared.borrow().clone() else {
+                return;
+            };
+            let on_queue = self.ivars().on_queue.borrow().clone();
+            let (tx, ty) = *self.ivars().touch_start.borrow();
+            let bounds = view.bounds();
+            *self.ivars().long_press_fired.borrow_mut() = true;
+            queue_card_at(
+                &state,
+                &prepared,
+                &on_queue,
+                tx,
+                ty,
+                bounds.size.width as f32,
+                bounds.size.height as f32,
+            );
         }
     }
 );
@@ -270,7 +414,7 @@ impl SceneHost {
                 s.drag_velocity = 0.0;
             } else {
                 s.angle += s.drag_velocity;
-                if s.spin != 0.0 && s.cols > 0 {
+                if !s.touch_active && s.spin != 0.0 && s.cols > 0 {
                     s.angle += s.spin * (2.0 * PI / s.cols as f32) * DT;
                 }
                 s.drag_velocity *= 0.94;
@@ -323,6 +467,12 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
             .or_else(|| p.get("oncardselect"))
             .cloned()
     });
+    let on_queue = props.and_then(|p| {
+        p.get("onCardQueue")
+            .or_else(|| p.get("oncardqueue"))
+            .cloned()
+    });
+    let queued_bits = parse_queued_bits(props);
 
     let frame = CGRect::new(
         CGPoint::new(0.0, 0.0),
@@ -336,6 +486,7 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
 
     *view.ivars().pan_target.ivars().prepared.borrow_mut() = prepared.clone();
     *view.ivars().pan_target.ivars().on_select.borrow_mut() = on_select.clone();
+    *view.ivars().pan_target.ivars().on_queue.borrow_mut() = on_queue.clone();
 
     let mut host_slot = view.ivars().host.borrow_mut();
     let Some(host) = host_slot.as_mut() else {
@@ -364,10 +515,12 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
         s.active_index = None;
         s.angle_target = None;
         s.zoom_target = None;
+        s.queued_bits = 0;
     }
     {
         let mut s = host.state.lock().unwrap();
         s.spin = spin;
+        s.queued_bits = queued_bits;
     }
 }
 
@@ -415,6 +568,12 @@ fn create_scene_host_view(
             .or_else(|| p.get("oncardselect"))
             .cloned()
     });
+    let on_queue = props.and_then(|p| {
+        p.get("onCardQueue")
+            .or_else(|| p.get("oncardqueue"))
+            .cloned()
+    });
+    let queued_bits = parse_queued_bits(props);
     let prepared_for_pan = prepared.clone();
 
     let state = Arc::new(Mutex::new(SceneState {
@@ -426,6 +585,8 @@ fn create_scene_host_view(
         active_index: None,
         angle_target: None,
         zoom_target: None,
+        queued_bits,
+        touch_active: false,
     }));
 
     let metal_layer = CAMetalLayer::new();
@@ -441,6 +602,10 @@ fn create_scene_host_view(
             state: state.clone(),
             prepared: RefCell::new(prepared_for_pan),
             on_select: RefCell::new(on_select.clone()),
+            on_queue: RefCell::new(on_queue.clone()),
+            long_press_fired: RefCell::new(false),
+            drag_occurred: RefCell::new(false),
+            touch_start: RefCell::new((0.0, 0.0)),
             view: RefCell::new(None),
         });
         msg_send![super(partial), init]
@@ -451,6 +616,19 @@ fn create_scene_host_view(
     pan.setCancelsTouchesInView(false);
     unsafe {
         let _: () = msg_send![&*pan, addTarget: &*pan_target, action: sel!(handlePan:)];
+    }
+
+    let long_press = UILongPressGestureRecognizer::new(mtm);
+    long_press.setMinimumPressDuration(LONG_PRESS_SECONDS);
+    long_press.setAllowableMovement(10.0);
+    unsafe {
+        let _: () = msg_send![&*long_press, addTarget: &*pan_target, action: sel!(handleLongPress:)];
+    }
+
+    let tap = UITapGestureRecognizer::new(mtm);
+    tap.setCancelsTouchesInView(false);
+    unsafe {
+        let _: () = msg_send![&*tap, addTarget: &*pan_target, action: sel!(handleTap:)];
     }
 
     let view: Retained<JukeSceneHostView> = unsafe {
@@ -474,6 +652,8 @@ fn create_scene_host_view(
     view.setAutoresizingMask(UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight);
     view.layer().addSublayer(metal_layer.as_ref());
     view.addGestureRecognizer(&pan);
+    view.addGestureRecognizer(&long_press);
+    view.addGestureRecognizer(&tap);
 
     let host = SceneHost {
         state: state.clone(),
