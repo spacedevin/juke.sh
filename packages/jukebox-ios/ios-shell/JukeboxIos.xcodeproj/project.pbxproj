@@ -60,6 +60,7 @@
 			buildConfigurationList = C00600000000000000000002 /* Build configuration list for PBXNativeTarget "JukeboxIos" */;
 			buildPhases = (
 				C00700000000000000000001 /* Build Rust staticlib */,
+				C00700000000000000000002 /* Copy card fonts */,
 				C00300000000000000000002 /* Sources */,
 				C00300000000000000000001 /* Frameworks */,
 			);
@@ -125,6 +126,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/../build-rust.sh\"\n";
+		};
+		C00700000000000000000002 /* Copy card fonts */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy card fonts";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "FONTS_SRC=\"${SRCROOT}/../fonts\"\nFONTS_DST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Fonts\"\nmkdir -p \"$FONTS_DST\"\nif [ -d \"$FONTS_SRC\" ]; then\n  cp \"$FONTS_SRC\"/*.ttf \"$FONTS_DST/\" 2>/dev/null || true\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

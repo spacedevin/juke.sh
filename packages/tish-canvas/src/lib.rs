@@ -3,6 +3,10 @@
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod canvas;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+mod fonts_api;
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+mod text;
 
 use std::sync::Arc;
 

@@ -11,6 +11,8 @@
     "@spacedevin/juke-cards": "file:../juke-cards"
   },
   "scripts": {
+    "fonts": "bash ../../scripts/download-jukebox-fonts.sh",
+    "prebuild": "npm run fonts",
     "build": "cargo run --manifest-path ../../../tish/tish/Cargo.toml -q -p tishlang -- build --target native --native-backend rust --crate-type staticlib --ios-triple aarch64-apple-ios-sim src/main.tish -o dist/jukebox-ios",
     "build:device": "cargo run --manifest-path ../../../tish/tish/Cargo.toml -q -p tishlang -- build --target native --native-backend rust --crate-type staticlib --ios-triple aarch64-apple-ios src/main.tish -o dist/jukebox-ios"
   }

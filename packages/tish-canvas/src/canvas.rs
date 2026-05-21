@@ -444,7 +444,7 @@ impl Ctx2D {
             .unwrap_or_else(|| "alphabetic".into());
         let color = fill_color(self).0;
         let (tx, ty) = self.state.transform.apply(x, y);
-        draw_text_simple(self, text, tx, ty, &font, &align, &baseline, color);
+        draw_text_raster(self, text, tx, ty, &font, &align, &baseline, color);
         self.sync_canvas_pixels();
     }
 
@@ -570,7 +570,7 @@ fn draw_line(ctx: &mut Ctx2D, x0: f64, y0: f64, x1: f64, y1: f64, width: f64, co
     }
 }
 
-fn draw_text_simple(
+fn draw_text_raster(
     ctx: &mut Ctx2D,
     text: &str,
     x: f64,
@@ -580,53 +580,21 @@ fn draw_text_simple(
     baseline: &str,
     color: Rgba,
 ) {
-    let (size, _family) = parse_font(font);
-    let char_w = size * 0.55;
-    let width = text.chars().count() as f64 * char_w;
-    let mut dx = x;
-    match align {
-        "center" => dx -= width / 2.0,
-        "right" | "end" => dx -= width,
-        _ => {}
-    }
-    let mut dy = y;
-    match baseline {
-        "middle" => dy -= size / 2.0,
-        "bottom" => dy -= size,
-        _ => dy -= size * 0.8,
-    }
-    for (i, ch) in text.chars().enumerate() {
-        if ch.is_whitespace() {
-            continue;
-        }
-        let cx = dx + i as f64 * char_w;
-        for py in 0..(size as i32) {
-            for px in 0..(char_w as i32) {
-                ctx.plot((cx + px as f64).round() as i32, (dy + py as f64).round() as i32, color);
-            }
-        }
-    }
-}
-
-fn parse_font(font: &str) -> (f64, String) {
-    let mut size = 10.0;
-    let mut family = "Helvetica".to_string();
-    let mut bold = false;
-    for part in font.split_whitespace() {
-        if part == "bold" {
-            bold = true;
-        } else if part.ends_with("px") {
-            if let Ok(n) = part.trim_end_matches("px").parse::<f64>() {
-                size = n;
-            }
-        } else if !part.is_empty() {
-            family = part.trim_matches('"').to_string();
-        }
-    }
-    if bold {
-        family = format!("{} Bold", family);
-    }
-    (size, family)
+    let parsed = crate::text::parse_font(font);
+    let face = crate::text::font_for(&parsed.family, parsed.bold);
+    crate::text::draw_glyphs(
+        &mut |px, py, r, g, b, a| {
+            ctx.plot(px, py, Rgba { r, g, b, a });
+        },
+        &face,
+        text,
+        x,
+        y,
+        parsed.size as f32,
+        align,
+        baseline,
+        (color.r, color.g, color.b, color.a),
+    );
 }
 
 fn image_data_from_backend(backend: &CanvasBackend, x: i32, y: i32, w: u32, h: u32) -> Vec<f64> {
@@ -971,5 +939,6 @@ pub fn document_value() -> Value {
     });
     let mut m = ObjectMap::default();
     m.insert(Arc::from("createElement"), create_element);
+    m.insert(Arc::from("fonts"), crate::fonts_api::fonts_object());
     Value::object(m)
 }
