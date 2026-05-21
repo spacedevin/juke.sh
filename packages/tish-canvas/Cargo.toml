@@ -1,0 +1,12 @@
+[package]
+name = "tish-canvas"
+version = "0.1.0"
+edition = "2021"
+description = "document/canvas DOM shim for native Tish (juke-cards, etc.)"
+license = "PIF"
+
+[dependencies]
+tishlang_core = { path = "../../../tish/tish/crates/tish_core" }
+
+[target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
+core-foundation = "0.10"

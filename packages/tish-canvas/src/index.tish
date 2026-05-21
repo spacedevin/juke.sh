@@ -1,0 +1,4 @@
+// Browser / JS target: delegate to the real DOM.
+export fn getDocument() {
+  return document
+}

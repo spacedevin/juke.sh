@@ -1,0 +1,11 @@
+{
+  "name": "tish-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native document/canvas shim so Tish juke-cards runs on iOS (no card logic here)",
+  "tish": {
+    "module": true,
+    "crate": "tish-canvas",
+    "export": "canvas_object"
+  }
+}

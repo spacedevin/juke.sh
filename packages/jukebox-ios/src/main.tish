@@ -1,18 +1,32 @@
-// Native jukebox iOS entry (WIP port from Lattish/DOM).
+// Native jukebox iOS — card art from Tish juke-cards; display via UIKit host tags.
 //
-// Build: `just build-ios` from jukebox repo root.
+// Build: `just run-jukebox-ios-sim` from jukebox repo root.
 
 import { ios, useState } from "tish:ios"
+import { isLoggedIn } from "tish:spotify-ios"
+import { createSceneView, version as sceneVersion } from "tish:juke-scene"
+import { generateCardArt } from "@spacedevin/juke-cards"
+
+let demoSong = {
+  titleA: "JOHNNY B",
+  titleB: "GOODE",
+  artist: "Chuck Berry",
+  code: "A1",
+}
 
 fn App() {
-  let [ready, setReady] = useState(false)
+  let [tick, setTick] = useState(0)
+  let loggedIn = isLoggedIn()
+  let art = generateCardArt(demoSong)
   return (
     <div>
       <h1>juke.sh</h1>
-      <p>{"Native iOS shell — scene + Spotify modules wiring in progress."}</p>
-      <SceneView height={400} />
-      <button onClick={() => setReady(!ready)}>
-        {ready ? "Ready" : "Tap when modules land"}
+      <p>{"Spotify: " + (loggedIn ? "logged in" : "not logged in")}</p>
+      <p>{"Scene: " + sceneVersion}</p>
+      <CardArt art={art} height={100} />
+      <SceneView height={280} />
+      <button onClick={() => setTick(tick + 1)}>
+        {"Refresh card (" + tick + ")"}
       </button>
     </div>
   )

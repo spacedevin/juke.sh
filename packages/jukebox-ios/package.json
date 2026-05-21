@@ -5,9 +5,10 @@
   "description": "juke.sh native iOS app (Tish staticlib + Xcode shell)",
   "dependencies": {
     "tish-ios": "file:../../../tish/tish-apple/crates/tish-ios",
+    "tish-canvas": "file:../tish-canvas",
     "tish-spotify-ios": "file:../tish-spotify-ios",
     "tish-juke-scene": "file:../tish-juke-scene",
-    "juke-cards-native": "file:../juke-cards-native"
+    "@spacedevin/juke-cards": "file:../juke-cards"
   },
   "scripts": {
     "build": "cargo run --manifest-path ../../../tish/tish/Cargo.toml -q -p tishlang -- build --target native --native-backend rust --crate-type staticlib --ios-triple aarch64-apple-ios-sim src/main.tish -o dist/jukebox-ios",

@@ -103,3 +103,23 @@ run-hello-ios-sim:
 
 build-ios:
     cd "{{ justfile_directory() }}/packages/jukebox-ios" && npm install && npm run build
+
+IOS_JUKEBOX_DERIVED := justfile_directory() + "/target/ios-jukebox-derived"
+IOS_JUKEBOX_PROJECT := justfile_directory() + "/packages/jukebox-ios/ios-shell/JukeboxIos.xcodeproj"
+IOS_JUKEBOX_BUNDLE := "sh.juke.ios"
+
+# Compile jukebox-ios for the simulator (staticlib + Xcode link).
+dev-jukebox-ios-sim: build-ios
+    xcodebuild -project "{{ IOS_JUKEBOX_PROJECT }}" \
+      -scheme JukeboxIos \
+      -destination 'platform=iOS Simulator,name={{ IOS_SIM_DEVICE }}' \
+      -derivedDataPath "{{ IOS_JUKEBOX_DERIVED }}" \
+      build
+
+# Launch an already-built jukebox-ios on the simulator (no rebuild).
+launch-jukebox-ios-sim:
+    "{{ justfile_directory() }}/scripts/launch-jukebox-ios-sim.sh"
+
+# Build + launch jukebox-ios on the simulator.
+run-jukebox-ios-sim:
+    "{{ justfile_directory() }}/scripts/run-jukebox-ios-sim.sh"

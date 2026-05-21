@@ -1,9 +1,0 @@
-[package]
-name = "juke-cards-native"
-version = "0.1.0"
-edition = "2021"
-description = "Native juke-cards art generation for iOS (CoreGraphics)"
-license = "PIF"
-
-[dependencies]
-tishlang_core = { path = "../../../tish/tish/crates/tish_core" }

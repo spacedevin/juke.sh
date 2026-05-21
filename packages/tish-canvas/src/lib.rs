@@ -1,0 +1,34 @@
+//! Native `document` / canvas shim for Tish packages like `@spacedevin/juke-cards`.
+//! Card generation logic stays in Tish — this crate only provides the DOM surface.
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+mod canvas;
+
+use std::sync::Arc;
+
+use tishlang_core::{ObjectMap, Value};
+
+/// Browser-style `document` global for native builds (injected by tish_compile).
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+pub fn document_value() -> Value {
+    canvas::document_value()
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+pub fn canvas_object() -> Value {
+    let get_document = Value::native(|_args: &[Value]| canvas::document_value());
+    let mut m = ObjectMap::default();
+    m.insert(Arc::from("getDocument"), get_document);
+    Value::object(m)
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+pub fn canvas_object() -> Value {
+    let get_document = Value::native(|_args: &[Value]| {
+        eprintln!("tish-canvas: getDocument is only available on Apple platforms");
+        Value::Null
+    });
+    let mut m = ObjectMap::default();
+    m.insert(Arc::from("getDocument"), get_document);
+    Value::object(m)
+}
