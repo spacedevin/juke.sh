@@ -11,3 +11,4 @@ packages/juke-cards/lib
 packages/jukebox/public/dist
 target
 Cargo.lock
+dist

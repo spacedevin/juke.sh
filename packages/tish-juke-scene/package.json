@@ -1,0 +1,11 @@
+{
+  "name": "tish-juke-scene",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Metal 3D jukebox scene for iOS",
+  "tish": {
+    "module": true,
+    "crate": "tish-juke-scene",
+    "export": "juke_scene_object"
+  }
+}

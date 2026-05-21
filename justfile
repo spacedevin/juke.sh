@@ -8,6 +8,7 @@
 export CARGO_TARGET_DIR := justfile_directory() + "/target"
 TISH_ROOT := env_var_or_default("TISH_ROOT", justfile_directory() + "/../tish")
 TISH := env_var_or_default("TISH", "tish")
+TISH_APPLE := justfile_directory() + "/../tish/tish-apple"
 TISH_FMT := env_var_or_default("TISH_FMT", TISH_ROOT + "/target/release/tish-fmt")
 TISH_LINT := env_var_or_default("TISH_LINT", TISH_ROOT + "/target/release/tish-lint")
 
@@ -73,3 +74,32 @@ lint:
 
 clean:
     rm -rf packages/jukebox/public/dist packages/juke-cards/dist packages/juke-cards/lib packages/bridges/dist target
+
+# --- iOS native (tish-apple) ---
+
+IOS_SIM_DEVICE := env_var_or_default("IOS_SIM_DEVICE", "iPhone 17")
+IOS_HELLO_DERIVED := justfile_directory() + "/target/ios-hello-derived"
+IOS_HELLO_PROJECT := TISH_APPLE + "/examples/hello-ios/ios-shell/HelloIos.xcodeproj"
+IOS_HELLO_BUNDLE := "com.tishlang.helloios"
+
+build-hello-ios:
+    cd "{{ TISH_APPLE }}/examples/hello-ios" && npm install && npm run build
+
+# Compile hello-ios for the simulator (staticlib + Xcode link).
+dev-ios-sim: build-hello-ios
+    xcodebuild -project "{{ IOS_HELLO_PROJECT }}" \
+      -scheme HelloIos \
+      -destination 'platform=iOS Simulator,name={{ IOS_SIM_DEVICE }}' \
+      -derivedDataPath "{{ IOS_HELLO_DERIVED }}" \
+      build
+
+# Launch an already-built hello-ios on the simulator (no rebuild).
+launch-hello-ios-sim:
+    "{{ justfile_directory() }}/scripts/launch-hello-ios-sim.sh"
+
+# Build + launch (convenience when you want a full refresh).
+run-hello-ios-sim:
+    "{{ justfile_directory() }}/scripts/run-hello-ios-sim.sh"
+
+build-ios:
+    cd "{{ justfile_directory() }}/packages/jukebox-ios" && npm install && npm run build

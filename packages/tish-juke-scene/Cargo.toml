@@ -1,0 +1,15 @@
+[package]
+name = "tish-juke-scene"
+version = "0.1.0"
+edition = "2021"
+description = "Metal jukebox scene for iOS (tish:juke-scene)"
+license = "PIF"
+
+[dependencies]
+tishlang_core = { path = "../../../tish/tish/crates/tish_core" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6", default-features = true }
+objc2-foundation = { version = "0.3", default-features = true }
+objc2-ui-kit = { version = "0.3", default-features = true, features = ["UIView", "UIColor"] }
+objc2-core-foundation = { version = "0.3", default-features = true, features = ["CFCGTypes"] }

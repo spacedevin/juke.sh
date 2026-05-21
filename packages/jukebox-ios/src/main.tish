@@ -1,0 +1,21 @@
+// Native jukebox iOS entry (WIP port from Lattish/DOM).
+//
+// Build: `just build-ios` from jukebox repo root.
+
+import { ios, useState } from "tish:ios"
+
+fn App() {
+  let [ready, setReady] = useState(false)
+  return (
+    <div>
+      <h1>juke.sh</h1>
+      <p>{"Native iOS shell — scene + Spotify modules wiring in progress."}</p>
+      <SceneView height={400} />
+      <button onClick={() => setReady(!ready)}>
+        {ready ? "Ready" : "Tap when modules land"}
+      </button>
+    </div>
+  )
+}
+
+ios.run(App)

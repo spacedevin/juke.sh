@@ -1,0 +1,14 @@
+[package]
+name = "tish-spotify-ios"
+version = "0.1.0"
+edition = "2021"
+description = "Spotify iOS SDK bridge for Tish (tish:spotify-ios)"
+license = "PIF"
+
+[dependencies]
+tishlang_core = { path = "../../../tish/tish/crates/tish_core" }
+tishlang_runtime = { path = "../../../tish/tish/crates/tish_runtime" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = { version = "0.6", default-features = true }
+objc2-foundation = { version = "0.3", default-features = true }

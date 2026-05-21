@@ -1,0 +1,11 @@
+{
+  "name": "tish-spotify-ios",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spotify iOS SDK native module for jukebox",
+  "tish": {
+    "module": true,
+    "crate": "tish-spotify-ios",
+    "export": "spotify_ios_object"
+  }
+}
