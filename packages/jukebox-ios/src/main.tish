@@ -7,17 +7,18 @@ import { isLoggedIn } from "tish:spotify-ios"
 import { createSceneView, version as sceneVersion } from "tish:juke-scene"
 import { generateCardArt } from "@spacedevin/juke-cards"
 
-let demoSong = {
-  titleA: "JOHNNY B",
-  titleB: "GOODE",
-  artist: "Chuck Berry",
-  code: "A1",
-}
+let demoSongs = [
+  { titleA: "JOHNNY B", titleB: "GOODE", artist: "Chuck Berry", code: "A1" },
+  { titleA: "STAIRWAY", titleB: "TO HEAVEN", artist: "Led Zeppelin", code: "B2" },
+  { titleA: "SUPERSTITION", titleB: "", artist: "Stevie Wonder", code: "C3" },
+  { titleA: "BILLIE JEAN", titleB: "", artist: "Michael Jackson", code: "D4" },
+]
 
 fn App() {
   let [tick, setTick] = useState(0)
   let loggedIn = isLoggedIn()
-  let art = generateCardArt(demoSong)
+  let song = demoSongs[tick % demoSongs.length]
+  let art = generateCardArt(song)
   return (
     <div>
       <h1>juke.sh</h1>

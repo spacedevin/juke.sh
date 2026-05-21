@@ -1,11 +1,59 @@
 //! CPU canvas 2D subset for juke-cards on Apple platforms.
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tishlang_core::{ObjectMap, Value, VmRef};
 
+use crate::text::{ParsedFont, ResolvedFont};
+
 type SharedBackend = Arc<Mutex<CanvasBackend>>;
 type SharedCtx = Arc<Mutex<Ctx2D>>;
+
+static NEXT_CANVAS_ID: AtomicU64 = AtomicU64::new(1);
+static CANVAS_BACKENDS: OnceLock<Mutex<HashMap<u64, SharedBackend>>> = OnceLock::new();
+
+fn canvas_backends() -> &'static Mutex<HashMap<u64, SharedBackend>> {
+    CANVAS_BACKENDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn attach_canvas_backend(canvas: &Value, backend: SharedBackend) {
+    let id = NEXT_CANVAS_ID.fetch_add(1, Ordering::Relaxed);
+    if let Value::Object(obj) = canvas {
+        obj.borrow_mut()
+            .strings
+            .insert(Arc::from("__canvasId"), Value::Number(id as f64));
+    }
+    canvas_backends().lock().unwrap().insert(id, backend);
+}
+
+/// Read RGBA bytes from the Rust backend (used by CardArt / Metal without __pixels sync).
+pub fn canvas_rgba_bytes(canvas: &Value) -> Option<(u32, u32, Vec<u8>)> {
+    let Value::Object(obj) = canvas else {
+        return None;
+    };
+    let m = &obj.borrow().strings;
+    if let Some(Value::Number(id)) = m.get("__canvasId") {
+        let backend = canvas_backends().lock().unwrap().get(&(*id as u64))?.clone();
+        let b = backend.lock().unwrap();
+        return Some((b.width, b.height, b.pixels.clone()));
+    }
+    let w = m.get("width")?.as_number()? as u32;
+    let h = m.get("height")?.as_number()? as u32;
+    let Value::Array(arr) = m.get("__pixels")? else {
+        return None;
+    };
+    let rgba: Vec<u8> = arr
+        .borrow()
+        .iter()
+        .filter_map(|v| v.as_number().map(|n| n.round().clamp(0.0, 255.0) as u8))
+        .collect();
+    if rgba.len() < (w as usize * h as usize * 4) {
+        return None;
+    }
+    Some((w, h, rgba))
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Rgba {
@@ -120,7 +168,7 @@ struct DrawState {
     transform: Transform,
     path: Vec<PathSeg>,
     path_start: Option<(f64, f64)>,
-    stack: Vec<(Transform, Vec<PathSeg>, Option<(f64, f64)>)>,
+    stack: Vec<(Transform, Vec<PathSeg>, Option<(f64, f64)>, ObjectMap)>,
 }
 
 impl Default for DrawState {
@@ -298,29 +346,6 @@ fn blend(dst: Rgba, src: Rgba, op: CompositeOp, global_alpha: f64) -> Rgba {
 }
 
 impl Ctx2D {
-    fn sync_canvas_pixels(&self) {
-        let backend = self.backend.lock().unwrap();
-        let arr: Vec<Value> = backend
-            .pixels
-            .iter()
-            .map(|&b| Value::Number(b as f64))
-            .collect();
-        let pixels = Value::Array(VmRef::new(arr));
-        if let Value::Object(obj) = &self.canvas {
-            obj.borrow_mut()
-                .strings
-                .insert(Arc::from("__pixels"), pixels);
-            obj.borrow_mut().strings.insert(
-                Arc::from("width"),
-                Value::Number(backend.width as f64),
-            );
-            obj.borrow_mut().strings.insert(
-                Arc::from("height"),
-                Value::Number(backend.height as f64),
-            );
-        }
-    }
-
     fn plot(&mut self, x: i32, y: i32, color: Rgba) {
         let ga = global_alpha(self);
         let op = composite_op(self);
@@ -341,7 +366,6 @@ impl Ctx2D {
                 self.plot(px, py, color);
             }
         }
-        self.sync_canvas_pixels();
     }
 
     fn stroke_rect(&mut self, x: f64, y: f64, w: f64, h: f64) {
@@ -419,7 +443,6 @@ impl Ctx2D {
                 i += 2;
             }
         }
-        self.sync_canvas_pixels();
     }
 
     fn stroke_path(&mut self) {
@@ -434,18 +457,14 @@ impl Ctx2D {
             let (x1, y1) = self.state.transform.apply(w[1].0, w[1].1);
             draw_line(self, x0, y0, x1, y1, lw, color);
         }
-        self.sync_canvas_pixels();
     }
 
-    fn fill_text(&mut self, text: &str, x: f64, y: f64) {
-        let font = prop_string(&self.self_obj, "font").unwrap_or_else(|| "10px sans-serif".into());
-        let align = prop_string(&self.self_obj, "textAlign").unwrap_or_else(|| "start".into());
-        let baseline = prop_string(&self.self_obj, "textBaseline")
-            .unwrap_or_else(|| "alphabetic".into());
-        let color = fill_color(self).0;
-        let (tx, ty) = self.state.transform.apply(x, y);
-        draw_text_raster(self, text, tx, ty, &font, &align, &baseline, color);
-        self.sync_canvas_pixels();
+    fn fill_text(&mut self, text: &str, x: f64, y: f64, max_width: Option<f64>) {
+        draw_text_raster(self, text, x, y, max_width, false);
+    }
+
+    fn stroke_text(&mut self, text: &str, x: f64, y: f64, max_width: Option<f64>) {
+        draw_text_raster(self, text, x, y, max_width, true);
     }
 
     fn draw_image(&mut self, src_canvas: &Value, dx: f64, dy: f64) {
@@ -467,7 +486,6 @@ impl Ctx2D {
                 self.plot((dx + sx as f64).round() as i32, (dy + sy as f64).round() as i32, c);
             }
         }
-        self.sync_canvas_pixels();
     }
 
     fn get_image_data(&self, x: i32, y: i32, w: u32, h: u32) -> Value {
@@ -496,7 +514,6 @@ impl Ctx2D {
                 self.plot(dx + col as i32, dy + row as i32, c);
             }
         }
-        self.sync_canvas_pixels();
     }
 
     fn create_image_data(&self, w: u32, h: u32) -> Value {
@@ -570,31 +587,128 @@ fn draw_line(ctx: &mut Ctx2D, x0: f64, y0: f64, x1: f64, y1: f64, width: f64, co
     }
 }
 
+fn snapshot_style_props(obj: &Value) -> ObjectMap {
+    let Value::Object(o) = obj else {
+        return ObjectMap::default();
+    };
+    o.borrow()
+        .strings
+        .iter()
+        .filter(|(_, v)| !matches!(v, Value::Function(_)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+fn restore_style_props(obj: &mut Value, props: ObjectMap) {
+    let Value::Object(o) = obj else {
+        return;
+    };
+    let mut m = o.borrow_mut();
+    let methods: ObjectMap = m
+        .strings
+        .iter()
+        .filter(|(_, v)| matches!(v, Value::Function(_)))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    m.strings = props;
+    for (k, v) in methods {
+        m.strings.insert(k, v);
+    }
+}
+
+fn shadow_enabled(ctx: &Ctx2D) -> Option<(Rgba, f64, f64)> {
+    let color = prop_string(&ctx.self_obj, "shadowColor")?;
+    let c = Color::parse(&color).0;
+    if c.a == 0 {
+        return None;
+    }
+    let ox = prop_number(&ctx.self_obj, "shadowOffsetX", 0.0);
+    let oy = prop_number(&ctx.self_obj, "shadowOffsetY", 0.0);
+    Some((c, ox, oy))
+}
+
+fn text_layout(ctx: &Ctx2D) -> (String, String, String, ParsedFont, ResolvedFont) {
+    let font = prop_string(&ctx.self_obj, "font").unwrap_or_else(|| "10px sans-serif".into());
+    let align = prop_string(&ctx.self_obj, "textAlign").unwrap_or_else(|| "start".into());
+    let baseline = prop_string(&ctx.self_obj, "textBaseline")
+        .unwrap_or_else(|| "alphabetic".into());
+    let parsed = crate::text::parse_font(&font);
+    let resolved = crate::text::resolve_font(&parsed);
+    (font, align, baseline, parsed, resolved)
+}
+
 fn draw_text_raster(
     ctx: &mut Ctx2D,
     text: &str,
     x: f64,
     y: f64,
-    font: &str,
-    align: &str,
-    baseline: &str,
-    color: Rgba,
+    max_width: Option<f64>,
+    stroke: bool,
 ) {
-    let parsed = crate::text::parse_font(font);
-    let face = crate::text::font_for(&parsed.family, parsed.bold);
-    crate::text::draw_glyphs(
-        &mut |px, py, r, g, b, a| {
-            ctx.plot(px, py, Rgba { r, g, b, a });
-        },
-        &face,
-        text,
-        x,
-        y,
-        parsed.size as f32,
-        align,
-        baseline,
-        (color.r, color.g, color.b, color.a),
-    );
+    let color = if stroke {
+        stroke_color(ctx).0
+    } else {
+        fill_color(ctx).0
+    };
+    let (tx, ty) = ctx.state.transform.apply(x, y);
+    let (_, align, baseline, parsed, resolved) = text_layout(ctx);
+    let size = parsed.size as f32;
+    let lw = line_width(ctx);
+
+    if !stroke {
+        if let Some((shadow, ox, oy)) = shadow_enabled(ctx) {
+            crate::text::draw_glyphs(
+                &mut |px, py, r, g, b, a| {
+                    ctx.plot(px, py, Rgba { r, g, b, a });
+                },
+                &resolved.font,
+                text,
+                tx + ox,
+                ty + oy,
+                size,
+                &align,
+                &baseline,
+                (shadow.r, shadow.g, shadow.b, shadow.a),
+                max_width,
+                resolved.synthetic_bold,
+            );
+        }
+    }
+
+    if stroke {
+        crate::text::draw_glyphs_stroke(
+            &mut |px, py, r, g, b, a| {
+                ctx.plot(px, py, Rgba { r, g, b, a });
+            },
+            &resolved.font,
+            text,
+            tx,
+            ty,
+            size,
+            &align,
+            &baseline,
+            (color.r, color.g, color.b, color.a),
+            max_width,
+            lw,
+            resolved.synthetic_bold,
+        );
+    } else {
+        crate::text::draw_glyphs(
+            &mut |px, py, r, g, b, a| {
+                ctx.plot(px, py, Rgba { r, g, b, a });
+            },
+            &resolved.font,
+            text,
+            tx,
+            ty,
+            size,
+            &align,
+            &baseline,
+            (color.r, color.g, color.b, color.a),
+            max_width,
+            resolved.synthetic_bold,
+        );
+    }
 }
 
 fn image_data_from_backend(backend: &CanvasBackend, x: i32, y: i32, w: u32, h: u32) -> Vec<f64> {
@@ -640,20 +754,12 @@ fn image_data_array(v: &Value) -> Option<Vec<f64>> {
 }
 
 fn read_canvas_pixels(canvas: &Value) -> Option<(u32, u32, Vec<f64>)> {
-    let Value::Object(obj) = canvas else {
-        return None;
-    };
-    let m = &obj.borrow().strings;
-    let w = m.get("width")?.as_number()? as u32;
-    let h = m.get("height")?.as_number()? as u32;
-    if let Some(Value::Array(arr)) = m.get("__pixels") {
-        return Some((
-            w,
-            h,
-            arr.borrow().iter().filter_map(|v| v.as_number()).collect(),
-        ));
-    }
-    None
+    let (w, h, rgba) = canvas_rgba_bytes(canvas)?;
+    Some((
+        w,
+        h,
+        rgba.into_iter().map(|b| b as f64).collect(),
+    ))
 }
 
 fn canvas_dims(canvas: &Value) -> (u32, u32) {
@@ -686,6 +792,7 @@ fn make_canvas_element() -> Value {
             let _opts = args.get(1);
             let (w, h) = canvas_dims(&canvas);
             let backend = Arc::new(Mutex::new(CanvasBackend::new(w, h)));
+            attach_canvas_backend(&canvas, backend.clone());
             make_context(canvas.clone(), backend)
         })
     };
@@ -760,17 +867,19 @@ fn attach_ctx_methods(m: &mut ObjectMap, shared: SharedCtx) {
     bind!("fill", |g, _args| { g.fill_path(); Value::Null });
     bind!("stroke", |g, _args| { g.stroke_path(); Value::Null });
     bind!("save", |g, _args| {
+        let props = snapshot_style_props(&g.self_obj);
         let t = g.state.transform;
         let p = g.state.path.clone();
         let s = g.state.path_start;
-        g.state.stack.push((t, p, s));
+        g.state.stack.push((t, p, s, props));
         Value::Null
     });
     bind!("restore", |g, _args| {
-        if let Some((t, p, s)) = g.state.stack.pop() {
+        if let Some((t, p, s, props)) = g.state.stack.pop() {
             g.state.transform = t;
             g.state.path = p;
             g.state.path_start = s;
+            restore_style_props(&mut g.self_obj, props);
         }
         Value::Null
     });
@@ -803,13 +912,23 @@ fn attach_ctx_methods(m: &mut ObjectMap, shared: SharedCtx) {
     });
     bind!("fillText", |g, args| {
         let text = args.first().map(|v| v.to_display_string()).unwrap_or_default();
-        g.fill_text(&text, num(args, 1), num(args, 2));
+        let max_width = args.get(3).and_then(|v| v.as_number());
+        g.fill_text(&text, num(args, 1), num(args, 2), max_width);
         Value::Null
     });
     bind!("strokeText", |g, args| {
         let text = args.first().map(|v| v.to_display_string()).unwrap_or_default();
-        g.fill_text(&text, num(args, 1), num(args, 2));
+        let max_width = args.get(3).and_then(|v| v.as_number());
+        g.stroke_text(&text, num(args, 1), num(args, 2), max_width);
         Value::Null
+    });
+    bind!("measureText", |g, args| {
+        let text = args.first().map(|v| v.to_display_string()).unwrap_or_default();
+        let (_, _, _, parsed, resolved) = text_layout(&g);
+        let width = crate::text::measure_text(&resolved.font, &text, parsed.size as f32);
+        let mut m = ObjectMap::default();
+        m.insert(Arc::from("width"), Value::Number(width));
+        Value::object(m)
     });
     bind!("drawImage", |g, args| {
         if let Some(src) = args.first() {
@@ -866,6 +985,13 @@ fn make_context(canvas: Value, backend: SharedBackend) -> Value {
         Arc::from("textBaseline"),
         Value::String(Arc::from("alphabetic")),
     );
+    m.insert(
+        Arc::from("shadowColor"),
+        Value::String(Arc::from("rgba(0,0,0,0)")),
+    );
+    m.insert(Arc::from("shadowOffsetX"), Value::Number(0.0));
+    m.insert(Arc::from("shadowOffsetY"), Value::Number(0.0));
+    m.insert(Arc::from("shadowBlur"), Value::Number(0.0));
 
     attach_ctx_methods(&mut m, shared_ctx.clone());
 
@@ -873,7 +999,6 @@ fn make_context(canvas: Value, backend: SharedBackend) -> Value {
     {
         let mut g = shared_ctx.lock().unwrap();
         g.self_obj = obj.clone();
-        g.sync_canvas_pixels();
     }
     obj
 }

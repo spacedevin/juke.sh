@@ -12,3 +12,4 @@ fontdue = "0.9"
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies]
 core-foundation = "0.10"
 objc2-foundation = { version = "0.3", default-features = true }
+tish-apple-common = { path = "../../../tish/tish-apple/crates/tish-apple-common" }

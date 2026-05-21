@@ -104,6 +104,10 @@ run-hello-ios-sim:
 build-ios:
     cd "{{ justfile_directory() }}/packages/jukebox-ios" && npm install && npm run build
 
+# Download Google Fonts used by card art (also runs via jukebox-ios prebuild).
+download-jukebox-fonts:
+    "{{ justfile_directory() }}/scripts/download-jukebox-fonts.sh"
+
 IOS_JUKEBOX_DERIVED := justfile_directory() + "/target/ios-jukebox-derived"
 IOS_JUKEBOX_PROJECT := justfile_directory() + "/packages/jukebox-ios/ios-shell/JukeboxIos.xcodeproj"
 IOS_JUKEBOX_BUNDLE := "sh.juke.ios"
