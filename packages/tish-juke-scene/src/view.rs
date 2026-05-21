@@ -126,10 +126,13 @@ define_class!(
                 return;
             };
             if pan.state() == UIGestureRecognizerState::Changed {
-                let dx = pan.translationInView(None).x as f32;
+                let t = pan.translationInView(None);
+                let dx = t.x as f32;
+                let dy = t.y as f32;
                 let mut s = self.ivars().state.lock().unwrap();
                 s.angle += dx * 0.018;
                 s.drag_velocity = dx * 0.09;
+                s.zoom = (s.zoom - dy * 0.003).clamp(0.0, 1.0);
                 unsafe {
                     let _: () = msg_send![
                         pan,
@@ -228,6 +231,7 @@ fn create_scene_host_view(
         drag_velocity: 0.0,
         spin,
         cols,
+        zoom: 0.0,
     }));
 
     let metal_layer = CAMetalLayer::new();

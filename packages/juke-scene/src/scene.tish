@@ -74,18 +74,6 @@ export fn computeCols(trackCount, rows) {
   return cols
 }
 
-fn shuffleRandom(arr) {
-  let i = arr.length - 1
-  while (i >= 1) {
-    let j = Math.floor(Math.random() * (i + 1))
-    let tmp = arr[i]
-    arr[i] = arr[j]
-    arr[j] = tmp
-    i = i - 1
-  }
-  return arr
-}
-
 export fn trackToCardSong(t, c, r) {
   let code = LETTERS.charAt(c % LETTERS.length) + (r + 1)
   if (t === null) {

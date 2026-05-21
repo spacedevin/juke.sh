@@ -1,0 +1,29 @@
+// Scene mode defaults shared with web jukebox.
+
+export const DEFAULT_ROWS = 10
+export const SPIN_MAX = 10
+export const SPIN_STEP = 0.25
+
+export fn clampSpin(n) {
+  if (n !== n) { return 0 }
+  if (n < -SPIN_MAX) { return -SPIN_MAX }
+  if (n > SPIN_MAX) { return SPIN_MAX }
+  return n
+}
+
+export fn clampUnit(n) {
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
+export fn defaultMode(opts) {
+  if (opts === null) { opts = {} }
+  let spin = 0
+  if (opts.spin !== null) { spin = opts.spin }
+  return {
+    spin: clampSpin(spin),
+    zoom: 0,
+    lighting: clampUnit(opts.lighting !== null ? opts.lighting : 0.5),
+  }
+}

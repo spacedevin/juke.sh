@@ -2,43 +2,88 @@
 //
 // Build: `just run-jukebox-ios-sim` from jukebox repo root.
 
-import { ios, useState } from "tish:ios"
+import { ios, useState, useEffect, useMemo } from "tish:ios"
+import { setTimeout, clearTimeout } from "tish:timers"
 import { isLoggedIn } from "tish:spotify-ios"
 import { debugSceneParse, version as sceneVersion } from "tish:juke-scene"
-import { makeSceneFromTracks } from "@spacedevin/juke-scene"
+import {
+  generateDebugTracks,
+  DEFAULT_ROWS,
+  SPIN_MAX,
+  SPIN_STEP,
+  createSceneBuilder,
+  stepSceneBuilder,
+  sceneFromBuilder,
+  builderProgress,
+} from "@spacedevin/juke-scene"
 import { generateCardArt } from "@spacedevin/juke-cards"
 
-const SCENE_ROWS = 4
 const SCENE_SEED = 42
-const SCENE_SPIN = 0.35
-
-let demoSongs = [
-  { titleA: "JOHNNY B", titleB: "GOODE", artist: "Chuck Berry", code: "A1" },
-  { titleA: "STAIRWAY", titleB: "TO HEAVEN", artist: "Led Zeppelin", code: "B2" },
-  { titleA: "SUPERSTITION", titleB: "", artist: "Stevie Wonder", code: "C3" },
-  { titleA: "BILLIE JEAN", titleB: "", artist: "Michael Jackson", code: "D4" },
-]
+const PREPARE_BATCH = 3
+const DEBUG_TRACKS = 60
+let debugTracks = generateDebugTracks(DEBUG_TRACKS)
 
 fn App() {
   let [tick, setTick] = useState(0)
   let [scene, setScene] = useState(null)
+  let [builder, setBuilder] = useState(null)
+  let [spin, setSpin] = useState(0.35)
   let loggedIn = isLoggedIn()
-  let song = demoSongs[tick % demoSongs.length]
-  let art = generateCardArt(song)
+  let song = debugTracks[tick % debugTracks.length]
+  let art = useMemo(() => generateCardArt(song), [tick])
+
+  let prepareKey = builder === null ? -1 : builder.slotIndex
+
+  useEffect(() => {
+    if (builder === null) {
+      return
+    }
+    let b = builder
+    let timer = setTimeout(() => {
+      if (b.slotIndex >= b.layout.slots.length) {
+        setScene(sceneFromBuilder(b))
+        setBuilder(null)
+        return
+      }
+      setBuilder(stepSceneBuilder(b, PREPARE_BATCH))
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [prepareKey])
 
   fn loadScene() {
-    setScene(makeSceneFromTracks(demoSongs, SCENE_ROWS, SCENE_SEED))
+    if (builder !== null) {
+      return
+    }
+    setScene(null)
+    setTimeout(() => {
+      setBuilder(createSceneBuilder(debugTracks, DEFAULT_ROWS, SCENE_SEED))
+    }, 0)
   }
 
   fn refreshCard() {
     setTick(tick + 1)
   }
 
+  fn spinDown() {
+    let n = spin - SPIN_STEP
+    if (n < -SPIN_MAX) { n = -SPIN_MAX }
+    setSpin(n)
+  }
+
+  fn spinUp() {
+    let n = spin + SPIN_STEP
+    if (n > SPIN_MAX) { n = SPIN_MAX }
+    setSpin(n)
+  }
+
   let metalDebug = scene === null ? "tap Load scene" : debugSceneParse(scene)
-  let sceneLabel = scene === null
-    ? "drum preview"
-    : (scene.cols + "x" + scene.rows + ", " + scene.cells.length + " cards")
-  let loadLabel = scene === null ? "Load scene" : "Reload scene"
+  let prepareProgress = builder !== null ? builderProgress(builder) : null
+  let sceneLabel = prepareProgress !== null
+    ? ("Preparing " + prepareProgress.cards + "/" + prepareProgress.tracks + " cards…")
+    : (scene === null
+      ? "drum preview"
+      : (scene.cols + "x" + scene.rows + ", " + scene.cells.length + " cards"))
+  let loadLabel = builder !== null ? "Preparing…" : (scene === null ? "Load scene" : "Reload scene")
 
   return (
     <div>
@@ -47,11 +92,13 @@ fn App() {
       <p>{"Scene: " + sceneVersion + " (" + sceneLabel + ")"}</p>
       <p>{"Metal: " + metalDebug}</p>
       <CardArt art={art} height={100} />
-      <SceneView height={280} scene={scene} spin={SCENE_SPIN} />
+      <SceneView height={280} scene={scene} spin={spin} />
       <button onClick={() => loadScene()}>{loadLabel}</button>
       <button onClick={() => refreshCard()}>
         {"Refresh card (" + tick + ")"}
       </button>
+      <button onClick={() => spinDown()}>{"Spin −"}</button>
+      <button onClick={() => spinUp()}>{"Spin + (" + spin + ")"}</button>
     </div>
   )
 }

@@ -1,0 +1,70 @@
+// Incremental scene build — generate card art in batches (keeps iOS UI responsive).
+
+import { generateCardArt } from "@spacedevin/juke-cards"
+import { computeLayout, trackToCardSong } from "./scene.tish"
+
+export fn createSceneBuilder(tracks, rows, seed) {
+  let layout = computeLayout(tracks, rows, seed)
+  return {
+    layout: layout,
+    cells: [],
+    slotIndex: 0,
+    trackCount: tracks.length,
+  }
+}
+
+export fn stepSceneBuilder(builder, batchSize) {
+  if (batchSize === null) { batchSize = 4 }
+  let layout = builder.layout
+  let cells = builder.cells
+  let i = builder.slotIndex
+  let slots = layout.slots
+  let n = 0
+  while (i < slots.length && n < batchSize) {
+    let slot = slots[i]
+    if (slot.track !== null) {
+      let song = trackToCardSong(slot.track, slot.c, slot.r)
+      let art = generateCardArt(song)
+      cells.push({
+        c: slot.c,
+        r: slot.r,
+        x: slot.x,
+        y: slot.y,
+        z: slot.z,
+        theta: slot.theta,
+        canvas: art.canvas,
+      })
+    }
+    i = i + 1
+    n = n + 1
+  }
+  return {
+    layout: layout,
+    cells: cells,
+    slotIndex: i,
+    trackCount: builder.trackCount,
+  }
+}
+
+export fn sceneFromBuilder(builder) {
+  let layout = builder.layout
+  return {
+    cols: layout.cols,
+    rows: layout.rows,
+    radius: layout.radius,
+    heightTotal: layout.heightTotal,
+    cells: builder.cells,
+  }
+}
+
+export fn builderProgress(builder) {
+  let total = builder.layout.slots.length
+  let done = builder.slotIndex
+  if (total < 1) { total = 1 }
+  return {
+    done: done,
+    total: total,
+    cards: builder.cells.length,
+    tracks: builder.trackCount,
+  }
+}

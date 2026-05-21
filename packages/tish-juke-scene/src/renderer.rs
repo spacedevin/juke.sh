@@ -117,6 +117,7 @@ pub struct SceneState {
     pub drag_velocity: f32,
     pub spin: f32,
     pub cols: u32,
+    pub zoom: f32,
 }
 
 pub struct DrumRenderer {
@@ -136,7 +137,7 @@ pub struct DrumRenderer {
     atlas_texture: Option<metal::Texture>,
     depth_texture: Option<metal::Texture>,
     depth_size: (u32, u32),
-    cam_dist: f32,
+    base_cam_dist: f32,
     state: Arc<Mutex<SceneState>>,
 }
 
@@ -290,7 +291,7 @@ impl DrumRenderer {
             atlas_texture,
             depth_texture: None,
             depth_size: (0, 0),
-            cam_dist,
+            base_cam_dist: cam_dist,
             state,
         })
     }
@@ -301,10 +302,11 @@ impl DrumRenderer {
 
         {
             let s = self.state.lock().unwrap();
+            let cam_dist = self.base_cam_dist * (1.0 - s.zoom * 0.55).max(0.4);
             let u = Uniforms {
                 angle: s.angle,
                 aspect: width / height.max(1.0),
-                cam_dist: self.cam_dist,
+                cam_dist,
                 _pad: 0.0,
             };
             let ptr = self.uniform_buffer.contents() as *mut Uniforms;
