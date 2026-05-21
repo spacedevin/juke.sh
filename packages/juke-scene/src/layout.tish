@@ -1,0 +1,39 @@
+// Scene layout math shared with web jukebox.
+
+export const PI = 3.141592653589793
+export const CARD_W = 3.2
+export const CARD_GAP = 0.3
+export const ROW_SPACING = 1.4
+export const CARD_RADIAL_OFFSET = 0.12
+
+export fn slotPosition(c, r, cols, rows) {
+  let colAngle = (PI * 2) / cols
+  let radius = (cols * (CARD_W + CARD_GAP)) / (PI * 2)
+  let startY = ((rows * ROW_SPACING) / 2) - (ROW_SPACING / 2)
+  let theta = ((-PI) + (c * colAngle)) + (colAngle / 2)
+  let x = Math.sin(theta) * (radius + CARD_RADIAL_OFFSET)
+  let z = Math.cos(theta) * (radius + CARD_RADIAL_OFFSET)
+  let y = startY - (r * ROW_SPACING)
+  return { c, r, theta, x, y, z, radius, colAngle }
+}
+
+export fn makeSceneFromArt(art, cols, rows) {
+  if (cols === null) { cols = 8 }
+  if (rows === null) { rows = 1 }
+  let slot = slotPosition(0, 0, cols, rows)
+  return {
+    cols,
+    rows,
+    radius: slot.radius,
+    heightTotal: (rows * ROW_SPACING) + 0.6,
+    cells: [{
+      c: 0,
+      r: 0,
+      x: slot.x,
+      y: slot.y,
+      z: slot.z,
+      theta: slot.theta,
+      canvas: art.canvas,
+    }],
+  }
+}

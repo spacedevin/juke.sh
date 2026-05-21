@@ -5,7 +5,12 @@
 import { ios, useState } from "tish:ios"
 import { isLoggedIn } from "tish:spotify-ios"
 import { debugSceneParse, version as sceneVersion } from "tish:juke-scene"
+import { makeSceneFromTracks } from "@spacedevin/juke-scene"
 import { generateCardArt } from "@spacedevin/juke-cards"
+
+const SCENE_ROWS = 4
+const SCENE_SEED = 42
+const SCENE_SPIN = 0.35
 
 let demoSongs = [
   { titleA: "JOHNNY B", titleB: "GOODE", artist: "Chuck Berry", code: "A1" },
@@ -14,25 +19,6 @@ let demoSongs = [
   { titleA: "BILLIE JEAN", titleB: "", artist: "Michael Jackson", code: "D4" },
 ]
 
-fn makeSceneFromArt(art) {
-  let radius = 1.35
-  return {
-    cols: 1,
-    rows: 1,
-    radius: radius,
-    heightTotal: 2.1,
-    cells: [{
-      c: 0,
-      r: 0,
-      x: 0,
-      y: 0,
-      z: radius,
-      theta: 0,
-      canvas: art.canvas,
-    }],
-  }
-}
-
 fn App() {
   let [tick, setTick] = useState(0)
   let [scene, setScene] = useState(null)
@@ -40,8 +26,18 @@ fn App() {
   let song = demoSongs[tick % demoSongs.length]
   let art = generateCardArt(song)
 
+  fn loadScene() {
+    setScene(makeSceneFromTracks(demoSongs, SCENE_ROWS, SCENE_SEED))
+  }
+
+  fn refreshCard() {
+    setTick(tick + 1)
+  }
+
   let metalDebug = scene === null ? "tap Load scene" : debugSceneParse(scene)
-  let sceneLabel = scene === null ? "drum preview" : "1x1, 1 cells"
+  let sceneLabel = scene === null
+    ? "drum preview"
+    : (scene.cols + "x" + scene.rows + ", " + scene.cells.length + " cards")
   let loadLabel = scene === null ? "Load scene" : "Reload scene"
 
   return (
@@ -51,9 +47,9 @@ fn App() {
       <p>{"Scene: " + sceneVersion + " (" + sceneLabel + ")"}</p>
       <p>{"Metal: " + metalDebug}</p>
       <CardArt art={art} height={100} />
-      <SceneView height={280} scene={scene} />
-      <button onClick={() => setScene(makeSceneFromArt(art))}>{loadLabel}</button>
-      <button onClick={() => setTick(tick + 1)}>
+      <SceneView height={280} scene={scene} spin={SCENE_SPIN} />
+      <button onClick={() => loadScene()}>{loadLabel}</button>
+      <button onClick={() => refreshCard()}>
         {"Refresh card (" + tick + ")"}
       </button>
     </div>

@@ -20,6 +20,8 @@ using namespace metal;
 struct Uniforms {
     float angle;
     float aspect;
+    float cam_dist;
+    float _pad;
 };
 
 struct SolidIn {
@@ -49,7 +51,7 @@ float3 rotate_y(float3 p, float a) {
 }
 
 float4 project(float3 p, constant Uniforms& u) {
-    float3 eye = float3(p.x, p.y + 0.15, p.z - 6.5);
+    float3 eye = float3(p.x, p.y + 0.15, p.z - u.cam_dist);
     float f = 1.0 / tan(0.41421356237);
     float2 ndc = float2(eye.x * f / u.aspect, eye.y * f) / (-eye.z);
     float depth = clamp((-eye.z - 0.1) / 99.9, 0.0, 1.0);
@@ -106,11 +108,15 @@ struct TexVertex {
 struct Uniforms {
     angle: f32,
     aspect: f32,
+    cam_dist: f32,
+    _pad: f32,
 }
 
 pub struct SceneState {
     pub angle: f32,
     pub drag_velocity: f32,
+    pub spin: f32,
+    pub cols: u32,
 }
 
 pub struct DrumRenderer {
@@ -130,6 +136,7 @@ pub struct DrumRenderer {
     atlas_texture: Option<metal::Texture>,
     depth_texture: Option<metal::Texture>,
     depth_size: (u32, u32),
+    cam_dist: f32,
     state: Arc<Mutex<SceneState>>,
 }
 
@@ -178,8 +185,14 @@ impl DrumRenderer {
         depth_desc.set_depth_write_enabled(true);
         let depth = device.new_depth_stencil_state(&depth_desc);
 
-        let drum_radius = prepared.map(|p| p.layout.radius).unwrap_or(1.35);
-        let (drum_vertices, drum_indices) = build_drum_mesh(drum_radius);
+        let drum_radius = prepared
+            .map(|p| p.layout.radius)
+            .unwrap_or(default_drum_radius(1));
+        let cam_dist = camera_distance(drum_radius);
+        let drum_half_h = prepared
+            .map(|p| p.layout.height_total * 0.5)
+            .unwrap_or(default_drum_half_h(1));
+        let (drum_vertices, drum_indices) = build_drum_mesh(drum_radius, drum_half_h);
         let drum_vertex_buffer = device.new_buffer_with_data(
             drum_vertices.as_ptr() as *const _,
             (drum_vertices.len() * std::mem::size_of::<SolidVertex>()) as u64,
@@ -242,8 +255,9 @@ impl DrumRenderer {
                 sampler_desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
                 sampler = Some(device.new_sampler(&sampler_desc));
 
+                let card_w = slot_card_width(scene.layout.cols, scene.layout.radius);
                 let (card_vertices, card_indices) =
-                    build_card_mesh(&scene.cards, CARD_W, CARD_H);
+                    build_card_mesh(&scene.cards, card_w, CARD_H);
                 card_vertex_buffer = Some(device.new_buffer_with_data(
                     card_vertices.as_ptr() as *const _,
                     (card_vertices.len() * std::mem::size_of::<TexVertex>()) as u64,
@@ -276,6 +290,7 @@ impl DrumRenderer {
             atlas_texture,
             depth_texture: None,
             depth_size: (0, 0),
+            cam_dist,
             state,
         })
     }
@@ -285,12 +300,12 @@ impl DrumRenderer {
         self.ensure_depth(width as u32, height as u32);
 
         {
-            let mut s = self.state.lock().unwrap();
-            s.angle += s.drag_velocity;
-            s.drag_velocity *= 0.94;
+            let s = self.state.lock().unwrap();
             let u = Uniforms {
                 angle: s.angle,
                 aspect: width / height.max(1.0),
+                cam_dist: self.cam_dist,
+                _pad: 0.0,
             };
             let ptr = self.uniform_buffer.contents() as *mut Uniforms;
             unsafe {
@@ -381,7 +396,28 @@ impl DrumRenderer {
 }
 
 const CARD_W: f32 = 3.2;
+const CARD_GAP: f32 = 0.3;
 const CARD_H: f32 = 1.25;
+const CARD_SURFACE_PUSH: f32 = 0.08;
+const PREVIEW_COLS: u32 = 1;
+
+fn default_drum_radius(cols: u32) -> f32 {
+    (cols as f32 * (CARD_W + CARD_GAP)) / (2.0 * PI)
+}
+
+fn default_drum_half_h(rows: u32) -> f32 {
+    ((rows as f32 * 1.4) + 0.6) * 0.5
+}
+
+fn slot_card_width(cols: u32, radius: f32) -> f32 {
+    let arc = (2.0 * PI * radius) / cols.max(1) as f32;
+    CARD_W.min(arc * 0.92)
+}
+
+fn camera_distance(radius: f32) -> f32 {
+    let base = default_drum_radius(PREVIEW_COLS).max(0.5);
+    6.5 * (radius / base).max(0.35)
+}
 
 fn upload_atlas(device: &Device, scene: &PreparedScene) -> Option<metal::Texture> {
     let desc = TextureDescriptor::new();
@@ -408,10 +444,10 @@ fn upload_atlas(device: &Device, scene: &PreparedScene) -> Option<metal::Texture
     Some(tex)
 }
 
-fn build_drum_mesh(radius: f32) -> (Vec<SolidVertex>, Vec<u16>) {
+fn build_drum_mesh(radius: f32, half_h: f32) -> (Vec<SolidVertex>, Vec<u16>) {
     let segments = 32usize;
     let rows = 8usize;
-    let half_h = 1.05f32;
+    let half_h = half_h.max(0.8);
     let palette: [[f32; 3]; 6] = [
         [0.95, 0.12, 0.18],
         [1.0, 0.72, 0.0],
@@ -463,7 +499,13 @@ fn transform_card_point(local: [f32; 3], card: &CardInstance) -> [f32; 3] {
     let rx = c * local[0] + s * local[2];
     let ry = local[1];
     let rz = -s * local[0] + c * local[2];
-    [rx + card.x, ry + card.y, rz + card.z]
+    let mut wx = rx + card.x;
+    let wy = ry + card.y;
+    let mut wz = rz + card.z;
+    let radial = (card.x * card.x + card.z * card.z).sqrt().max(1e-4);
+    wx += (card.x / radial) * CARD_SURFACE_PUSH;
+    wz += (card.z / radial) * CARD_SURFACE_PUSH;
+    [wx, wy, wz]
 }
 
 fn build_card_mesh(cards: &[CardInstance], card_w: f32, card_h: f32) -> (Vec<TexVertex>, Vec<u16>) {

@@ -44,13 +44,14 @@ fn blit_rgba(
     atlas_w: u32,
     dst_x: u32,
     dst_y: u32,
-    src_w: u32,
-    src_h: u32,
+    copy_w: u32,
+    copy_h: u32,
+    src_stride: u32,
     rgba: &[u8],
 ) {
-    for row in 0..src_h {
-        for col in 0..src_w {
-            let si = ((row * src_w + col) * 4) as usize;
+    for row in 0..copy_h {
+        for col in 0..copy_w {
+            let si = ((row * src_stride + col) * 4) as usize;
             if si + 3 >= rgba.len() {
                 continue;
             }
@@ -104,9 +105,9 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
             Some(c) => c,
             None => continue,
         };
-        let (cw, ch, rgba) = canvas_rgba_bytes(canvas)?;
-        let cw = cw.min(CELL_W);
-        let ch = ch.min(CELL_H);
+        let (src_w, src_h, rgba) = canvas_rgba_bytes(canvas)?;
+        let copy_w = src_w.min(CELL_W);
+        let copy_h = src_h.min(CELL_H);
 
         let c = num_field(cm, "c").unwrap_or(0.0).max(0.0) as u32;
         let r = num_field(cm, "r").unwrap_or(0.0).max(0.0) as u32;
@@ -116,12 +117,21 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
 
         let ax = c * CELL_W;
         let ay = r * CELL_H;
-        blit_rgba(&mut atlas, atlas_w, ax, ay, cw, ch, &rgba);
+        blit_rgba(
+            &mut atlas,
+            atlas_w,
+            ax,
+            ay,
+            copy_w,
+            copy_h,
+            src_w,
+            &rgba,
+        );
 
         let u0 = ax as f32 / atlas_w as f32;
         let v0 = ay as f32 / atlas_h as f32;
-        let u1 = (ax + cw) as f32 / atlas_w as f32;
-        let v1 = (ay + ch) as f32 / atlas_h as f32;
+        let u1 = (ax + copy_w) as f32 / atlas_w as f32;
+        let v1 = (ay + copy_h) as f32 / atlas_h as f32;
 
         let x = num_field(cm, "x").unwrap_or(0.0) as f32;
         let y = num_field(cm, "y").unwrap_or(0.0) as f32;

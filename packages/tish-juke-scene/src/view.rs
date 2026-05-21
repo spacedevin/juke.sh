@@ -1,6 +1,7 @@
 //! CAMetalLayer + CADisplayLink host for the jukebox drum preview.
 
 use std::cell::RefCell;
+use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
 
 use metal::{foreign_types::ForeignTypeRef, MetalLayerRef};
@@ -8,7 +9,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_core_foundation::{CGRect, CGPoint, CGSize};
-use objc2_foundation::{NSDefaultRunLoopMode, NSObject, NSObjectProtocol, NSRunLoop};
+use objc2_foundation::{NSDefaultRunLoopMode, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes};
 use objc2_metal::MTLCreateSystemDefaultDevice;
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CADisplayLink, CAMetalLayer};
@@ -127,8 +128,8 @@ define_class!(
             if pan.state() == UIGestureRecognizerState::Changed {
                 let dx = pan.translationInView(None).x as f32;
                 let mut s = self.ivars().state.lock().unwrap();
-                s.angle += dx * 0.012;
-                s.drag_velocity = dx * 0.06;
+                s.angle += dx * 0.018;
+                s.drag_velocity = dx * 0.09;
                 unsafe {
                     let _: () = msg_send![
                         pan,
@@ -158,6 +159,15 @@ impl SceneHost {
 
     fn draw_frame(&mut self) {
         self.sync_drawable_size();
+        {
+            let mut s = self.state.lock().unwrap();
+            const DT: f32 = 1.0 / 60.0;
+            s.angle += s.drag_velocity;
+            if s.spin != 0.0 && s.cols > 0 {
+                s.angle += s.spin * (2.0 * PI / s.cols as f32) * DT;
+            }
+            s.drag_velocity *= 0.94;
+        }
         let layer = self.metal_layer_ref();
         let size = layer.drawable_size();
         if size.width < 1.0 || size.height < 1.0 {
@@ -200,9 +210,24 @@ fn create_scene_host_view(
         .and_then(|p| p.get("scene"))
         .and_then(|scene| parse_scene(scene));
 
+    let spin = props
+        .and_then(|p| p.get("spin"))
+        .and_then(|v| v.as_number())
+        .unwrap_or(0.0) as f32;
+    let cols = prepared
+        .as_ref()
+        .map(|p| p.layout.cols)
+        .unwrap_or(1);
+    let init_angle = prepared
+        .as_ref()
+        .and_then(|p| p.cards.first())
+        .map(|c| PI - c.theta)
+        .unwrap_or(0.0);
     let state = Arc::new(Mutex::new(SceneState {
-        angle: 0.0,
-        drag_velocity: 0.012,
+        angle: init_angle,
+        drag_velocity: 0.0,
+        spin,
+        cols,
     }));
 
     let metal_layer = CAMetalLayer::new();
@@ -221,6 +246,7 @@ fn create_scene_host_view(
     };
     view.setBackgroundColor(Some(&UIColor::blackColor()));
     view.setClipsToBounds(true);
+    view.setUserInteractionEnabled(true);
     view.setAutoresizingMask(UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight);
     view.layer().addSublayer(metal_layer.as_ref());
 
@@ -254,6 +280,7 @@ fn create_scene_host_view(
     };
     unsafe {
         link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), &NSDefaultRunLoopMode);
+        link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), &NSRunLoopCommonModes);
     }
 
     let pan_target: Retained<JukeScenePanTarget> = unsafe {
@@ -262,6 +289,8 @@ fn create_scene_host_view(
         msg_send![super(partial), init]
     };
     let pan = UIPanGestureRecognizer::new(mtm);
+    pan.setDelaysTouchesBegan(false);
+    pan.setCancelsTouchesInView(false);
     unsafe {
         let _: () = msg_send![
             &*pan,

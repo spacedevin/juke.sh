@@ -1,0 +1,30 @@
+{
+  "name": "@spacedevin/juke-scene",
+  "version": "0.1.0",
+  "description": "Shared jukebox 3D scene layout, track grid, and atlas prep for web and native",
+  "type": "module",
+  "license": "PIF",
+  "tish": {
+    "module": "./src/index.tish"
+  },
+  "main": "./lib/index.mjs",
+  "module": "./lib/index.mjs",
+  "exports": {
+    ".": {
+      "tish": "./src/index.tish",
+      "import": "./lib/index.mjs",
+      "default": "./lib/index.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tish build --target js src/index.tish -o dist/index.js && node scripts/append-exports.mjs",
+    "pretest": "npm run build",
+    "test": "node test/run-tests.mjs"
+  },
+  "dependencies": {
+    "@spacedevin/juke-cards": "file:../juke-cards"
+  },
+  "devDependencies": {
+    "@tishlang/tish": "^1.10.0"
+  }
+}

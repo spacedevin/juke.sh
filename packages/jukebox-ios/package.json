@@ -8,7 +8,8 @@
     "tish-canvas": "file:../tish-canvas",
     "tish-spotify-ios": "file:../tish-spotify-ios",
     "tish-juke-scene": "file:../tish-juke-scene",
-    "@spacedevin/juke-cards": "file:../juke-cards"
+    "@spacedevin/juke-cards": "file:../juke-cards",
+    "@spacedevin/juke-scene": "file:../juke-scene"
   },
   "scripts": {
     "fonts": "bash ../../scripts/download-jukebox-fonts.sh",

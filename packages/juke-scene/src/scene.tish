@@ -1,0 +1,205 @@
+// Track grid + scene object for Metal / three.js hosts.
+
+import { generateCardArt } from "@spacedevin/juke-cards"
+import { slotPosition, CARD_W, CARD_GAP, ROW_SPACING, CARD_RADIAL_OFFSET } from "./layout.tish"
+
+const PI = 3.141592653589793
+const MIN_ROWS = 4
+const MAX_ROWS = 20
+const MIN_EMPTY = 10
+const MIN_COLS = 8
+const DRUM_HEIGHT_PAD = 4
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+export fn clampRows(n) {
+  if (n !== n) { return MIN_ROWS }
+  let v = Math.floor(n)
+  if (v < MIN_ROWS) { return MIN_ROWS }
+  if (v > MAX_ROWS) { return MAX_ROWS }
+  return v
+}
+
+fn toU32(n) {
+  n = Math.floor(n)
+  if (n < 0) { n = n + 4294967296 }
+  return n % 4294967296
+}
+
+fn normalizeTracks(tracks) {
+  if (tracks === null) { return [] }
+  return tracks
+}
+
+fn lcgNext(state) {
+  return toU32(state * 1664525 + 1013904223)
+}
+
+fn shuffleWithSeed(arr, seed) {
+  let state = toU32(seed)
+  let i = arr.length - 1
+  while (i >= 1) {
+    state = lcgNext(state)
+    let j = Math.floor((state / 4294967296) * (i + 1))
+    if (j > i) { j = i }
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+    i = i - 1
+  }
+  return arr
+}
+
+fn shuffleRandom(arr) {
+  let i = arr.length - 1
+  while (i >= 1) {
+    let j = Math.floor(Math.random() * (i + 1))
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+    i = i - 1
+  }
+  return arr
+}
+
+export fn computeCols(trackCount, rows) {
+  let needed = trackCount + MIN_EMPTY
+  let cols = MIN_COLS
+  if (MIN_COLS * rows < needed) {
+    cols = Math.ceil(needed / rows)
+  } else {
+    cols = Math.max(MIN_COLS, Math.ceil(needed / rows))
+  }
+  if (cols % 2 === 1) { cols = cols + 1 }
+  while (cols * rows < needed) { cols = cols + 2 }
+  return cols
+}
+
+fn shuffleRandom(arr) {
+  let i = arr.length - 1
+  while (i >= 1) {
+    let j = Math.floor(Math.random() * (i + 1))
+    let tmp = arr[i]
+    arr[i] = arr[j]
+    arr[j] = tmp
+    i = i - 1
+  }
+  return arr
+}
+
+export fn trackToCardSong(t, c, r) {
+  let code = LETTERS.charAt(c % LETTERS.length) + (r + 1)
+  if (t === null) {
+    return { titleA: "", titleB: "", artist: "", code: code, empty: true }
+  }
+  if (t.titleA) {
+    return {
+      uri: t.uri,
+      name: t.name,
+      artist: t.artist,
+      album: t.album,
+      titleA: t.titleA,
+      titleB: t.titleB || "",
+      code: t.code || code,
+    }
+  }
+  let name = t.name !== null ? (t.name + "") : ""
+  let titleA = name
+  let titleB = t.album !== null ? (t.album + "") : name
+  return {
+    uri: t.uri,
+    name: t.name,
+    artist: t.artist,
+    album: t.album,
+    titleA: titleA,
+    titleB: titleB,
+    code: code,
+  }
+}
+
+export fn computeLayout(tracks, rows, seed) {
+  tracks = normalizeTracks(tracks)
+  rows = clampRows(rows)
+  let cols = computeCols(tracks.length, rows)
+  let totalCells = cols * rows
+  let emptyCount = totalCells - tracks.length
+  if (emptyCount < 0) { emptyCount = 0 }
+
+  let display = []
+  let i = 0
+  while (i < tracks.length) {
+    display.push(tracks[i])
+    i = i + 1
+  }
+  i = 0
+  while (i < emptyCount) {
+    display.push(null)
+    i = i + 1
+  }
+
+  if (seed !== null) {
+    shuffleWithSeed(display, seed)
+  } else {
+    shuffleRandom(display)
+  }
+
+  let slots = []
+  i = 0
+  while (i < display.length) {
+    let c = i % cols
+    let r = Math.floor(i / cols)
+    let pos = slotPosition(c, r, cols, rows)
+    slots.push({
+      index: i,
+      c: c,
+      r: r,
+      track: display[i],
+      theta: pos.theta,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+    })
+    i = i + 1
+  }
+
+  let radius = (cols * (CARD_W + CARD_GAP)) / (PI * 2)
+  let heightTotal = (rows * ROW_SPACING) + DRUM_HEIGHT_PAD
+  return {
+    rows: rows,
+    cols: cols,
+    totalCells: totalCells,
+    emptyCount: emptyCount,
+    radius: radius,
+    heightTotal: heightTotal,
+    slots: slots,
+  }
+}
+
+export fn makeSceneFromTracks(tracks, rows, seed) {
+  let layout = computeLayout(tracks, rows, seed)
+  let cells = []
+  let i = 0
+  while (i < layout.slots.length) {
+    let slot = layout.slots[i]
+    if (slot.track !== null) {
+      let song = trackToCardSong(slot.track, slot.c, slot.r)
+      let art = generateCardArt(song)
+      cells.push({
+        c: slot.c,
+        r: slot.r,
+        x: slot.x,
+        y: slot.y,
+        z: slot.z,
+        theta: slot.theta,
+        canvas: art.canvas,
+      })
+    }
+    i = i + 1
+  }
+  return {
+    cols: layout.cols,
+    rows: layout.rows,
+    radius: layout.radius,
+    heightTotal: layout.heightTotal,
+    cells: cells,
+  }
+}

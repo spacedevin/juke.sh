@@ -1,0 +1,49 @@
+import {
+  clampRows as clampRowsImpl,
+  computeCols as computeColsImpl,
+  computeLayout as computeLayoutImpl,
+  trackToCardSong as trackToCardSongImpl,
+  makeSceneFromTracks as makeSceneFromTracksImpl,
+} from "./scene.tish"
+
+import {
+  slotPosition as slotPositionImpl,
+  makeSceneFromArt as makeSceneFromArtImpl,
+  CARD_W as CARD_W_VAL,
+  CARD_GAP as CARD_GAP_VAL,
+  ROW_SPACING as ROW_SPACING_VAL,
+  CARD_RADIAL_OFFSET as CARD_RADIAL_OFFSET_VAL,
+} from "./layout.tish"
+
+export fn clampRows(n) {
+  return clampRowsImpl(n)
+}
+
+export fn computeCols(trackCount, rows) {
+  return computeColsImpl(trackCount, rows)
+}
+
+export fn computeLayout(tracks, rows, seed) {
+  return computeLayoutImpl(tracks, rows, seed)
+}
+
+export fn trackToCardSong(t, c, r) {
+  return trackToCardSongImpl(t, c, r)
+}
+
+export fn makeSceneFromTracks(tracks, rows, seed) {
+  return makeSceneFromTracksImpl(tracks, rows, seed)
+}
+
+export fn slotPosition(c, r, cols, rows) {
+  return slotPositionImpl(c, r, cols, rows)
+}
+
+export fn makeSceneFromArt(art, cols, rows) {
+  return makeSceneFromArtImpl(art, cols, rows)
+}
+
+export const CARD_W = CARD_W_VAL
+export const CARD_GAP = CARD_GAP_VAL
+export const ROW_SPACING = ROW_SPACING_VAL
+export const CARD_RADIAL_OFFSET = CARD_RADIAL_OFFSET_VAL
