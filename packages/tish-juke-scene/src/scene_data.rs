@@ -1,10 +1,31 @@
 //! Read-only parse of Tish scene objects for Metal (never mutates the scene value).
 
+use std::hash::{Hash, Hasher};
+
 use tish_apple_common::canvas::canvas_rgba_bytes;
 use tishlang_core::{ObjectMap, Value};
 
 const CELL_W: u32 = 256;
 const CELL_H: u32 = 100;
+const CARD_W: f32 = 3.2;
+const CARD_GAP: f32 = 0.3;
+const ROW_SPACING: f32 = 1.4;
+const CARD_RADIAL_OFFSET: f32 = 0.12;
+
+/// Grid slot pose — must match [`layout.tish`](../../juke-scene/src/layout.tish).
+fn slot_position(c: u32, r: u32, cols: u32, rows: u32) -> (f32, f32, f32, f32) {
+    use std::f32::consts::PI;
+    let cols_f = cols.max(1) as f32;
+    let col_angle = (2.0 * PI) / cols_f;
+    let radius = (cols_f * (CARD_W + CARD_GAP)) / (2.0 * PI);
+    let start_y = (rows as f32 * ROW_SPACING) / 2.0 - ROW_SPACING / 2.0;
+    let theta = -PI + c as f32 * col_angle + col_angle / 2.0;
+    let radial = radius + CARD_RADIAL_OFFSET;
+    let x = theta.sin() * radial;
+    let z = theta.cos() * radial;
+    let y = start_y - r as f32 * ROW_SPACING;
+    (x, y, z, theta)
+}
 
 #[derive(Clone, Debug)]
 pub struct SceneLayout {
@@ -137,10 +158,10 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
         let u1 = (ax + copy_w) as f32 / atlas_w as f32;
         let v1 = (ay + copy_h) as f32 / atlas_h as f32;
 
-        let x = num_field(cm, "x").unwrap_or(0.0) as f32;
-        let y = num_field(cm, "y").unwrap_or(0.0) as f32;
-        let z = num_field(cm, "z").unwrap_or(radius as f64) as f32;
-        let theta = num_field(cm, "theta").unwrap_or(0.0) as f32;
+        let (x, y, z, theta) = slot_position(c, r, cols, rows);
+        let cell_index = num_field(cm, "index")
+            .map(|n| n.max(0.0) as usize)
+            .unwrap_or(index);
         let title = cm
             .get("titleA")
             .or_else(|| cm.get("title"))
@@ -148,7 +169,7 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
             .unwrap_or_default();
 
         cards.push(CardInstance {
-            index,
+            index: cell_index,
             c,
             r,
             title,
@@ -179,6 +200,20 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
         atlas_rgba: atlas,
         cards,
     })
+}
+
+/// Fingerprint of card layout identity — changes when shuffle/grid assignment changes.
+pub fn scene_fingerprint(p: &PreparedScene) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    p.layout.cols.hash(&mut h);
+    p.layout.rows.hash(&mut h);
+    p.cards.len().hash(&mut h);
+    for card in &p.cards {
+        card.index.hash(&mut h);
+        card.c.hash(&mut h);
+        card.r.hash(&mut h);
+    }
+    h.finish()
 }
 
 pub fn debug_scene_parse(scene: &Value) -> String {

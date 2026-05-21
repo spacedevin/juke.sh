@@ -26,6 +26,8 @@ export fn stepSceneBuilder(builder, batchSize) {
       let song = trackToCardSong(slot.track, slot.c, slot.r)
       let art = generateCardArt(song)
       cells.push({
+        index: cells.length,
+        slotIndex: slot.index,
         c: slot.c,
         r: slot.r,
         x: slot.x,

@@ -25,7 +25,7 @@ use tishlang_core::{ObjectMap, Value};
 
 use crate::hit_test::{go_to_card_angle, pick_card_at_point};
 use crate::renderer::{DrumRenderer, SceneState};
-use crate::scene_data::{parse_scene, PreparedScene};
+use crate::scene_data::{parse_scene, scene_fingerprint, PreparedScene};
 
 const TAP_DRAG_THRESHOLD: f32 = 24.0;
 const ZOOM_AUTO_THRESHOLD: f32 = 0.5;
@@ -106,6 +106,14 @@ fn end_touch(state: &Arc<Mutex<SceneState>>) {
     s.touch_active = false;
 }
 
+fn pick_surface(view: &JukeSceneHostView, tap_x: f32, tap_y: f32) -> (f32, f32, f32, f32) {
+    let scale = view.contentScaleFactor().max(1.0) as f32;
+    let bounds = view.bounds();
+    let w = bounds.size.width as f32 * scale;
+    let h = bounds.size.height as f32 * scale;
+    (tap_x * scale, tap_y * scale, w, h)
+}
+
 fn select_card_at(
     state: &Arc<Mutex<SceneState>>,
     prepared: &PreparedScene,
@@ -161,6 +169,7 @@ fn queue_card_at(
 struct SceneHost {
     state: Arc<Mutex<SceneState>>,
     prepared: Option<PreparedScene>,
+    scene_fingerprint: u64,
     renderer: RefCell<Option<DrumRenderer>>,
     renderer_failed: RefCell<bool>,
     metal_layer: Retained<CAMetalLayer>,
@@ -329,15 +338,15 @@ define_class!(
             };
             let on_select = self.ivars().on_select.borrow().clone();
             let loc = tap.locationInView(Some(&*view));
-            let bounds = view.bounds();
+            let (px, py, vw, vh) = pick_surface(&view, loc.x as f32, loc.y as f32);
             select_card_at(
                 &state,
                 &prepared,
                 &on_select,
-                loc.x as f32,
-                loc.y as f32,
-                bounds.size.width as f32,
-                bounds.size.height as f32,
+                px,
+                py,
+                vw,
+                vh,
             );
             end_touch(&state);
         }
@@ -362,17 +371,17 @@ define_class!(
                 return;
             };
             let on_queue = self.ivars().on_queue.borrow().clone();
-            let (tx, ty) = *self.ivars().touch_start.borrow();
-            let bounds = view.bounds();
+            let loc = long.locationInView(Some(&*view));
+            let (px, py, vw, vh) = pick_surface(&view, loc.x as f32, loc.y as f32);
             *self.ivars().long_press_fired.borrow_mut() = true;
             queue_card_at(
                 &state,
                 &prepared,
                 &on_queue,
-                tx,
-                ty,
-                bounds.size.width as f32,
-                bounds.size.height as f32,
+                px,
+                py,
+                vw,
+                vh,
             );
         }
     }
@@ -493,11 +502,12 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
         return;
     };
 
-    let old_cards = host.prepared.as_ref().map(|p| p.cards.len()).unwrap_or(0);
-    let new_cards = prepared.as_ref().map(|p| p.cards.len()).unwrap_or(0);
-    let scene_changed = old_cards != new_cards;
+    let old_fp = host.scene_fingerprint;
+    let new_fp = prepared.as_ref().map(scene_fingerprint).unwrap_or(0);
+    let scene_changed = new_fp != old_fp;
 
     host.prepared = prepared;
+    host.scene_fingerprint = new_fp;
     if scene_changed {
         host.reset_renderer();
         let cols = host.prepared.as_ref().map(|p| p.layout.cols).unwrap_or(1);
@@ -519,6 +529,10 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
     }
     {
         let mut s = host.state.lock().unwrap();
+        if (spin - s.spin).abs() > f32::EPSILON {
+            s.angle_target = None;
+            s.drag_velocity = 0.0;
+        }
         s.spin = spin;
         s.queued_bits = queued_bits;
     }
@@ -575,6 +589,7 @@ fn create_scene_host_view(
     });
     let queued_bits = parse_queued_bits(props);
     let prepared_for_pan = prepared.clone();
+    let prepared_fp = prepared.as_ref().map(scene_fingerprint).unwrap_or(0);
 
     let state = Arc::new(Mutex::new(SceneState {
         angle: init_angle,
@@ -658,6 +673,7 @@ fn create_scene_host_view(
     let host = SceneHost {
         state: state.clone(),
         prepared,
+        scene_fingerprint: prepared_fp,
         renderer: RefCell::new(None),
         renderer_failed: RefCell::new(false),
         metal_layer,

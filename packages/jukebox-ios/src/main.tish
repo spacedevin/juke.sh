@@ -90,10 +90,13 @@ fn App() {
   let activeLabel = "—"
   if (activeIdx >= 0 && scene !== null && scene.cells !== null) {
     let cell = scene.cells[activeIdx]
-    if (cell !== null && cell.titleA) {
-      activeLabel = cell.titleA
-    } else {
-      activeLabel = "#" + activeIdx
+    if (cell !== null) {
+      let pos = String(cell.c) + "," + String(cell.r)
+      if (cell.titleA) {
+        activeLabel = "#" + activeIdx + " · " + pos + " · " + cell.titleA
+      } else {
+        activeLabel = "#" + activeIdx + " · " + pos
+      }
     }
   }
 

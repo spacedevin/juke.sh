@@ -120,7 +120,7 @@ pub fn pick_card_at_point(
         [-hw, hh, 0.0],
     ];
 
-    let mut best: Option<(usize, f32)> = None;
+    let mut best: Option<(usize, f32, f32)> = None;
     for card in &scene.cards {
         let Some((quad, depth)) =
             project_card_quad(card, &corners, angle, cam_dist, aspect, view_w, view_h)
@@ -130,12 +130,17 @@ pub fn pick_card_at_point(
         if !point_in_quad(tap_x, tap_y, &quad) {
             continue;
         }
-        let dominated = best.map(|(_, bd)| depth >= bd).unwrap_or(false);
+        let cx = (quad[0].0 + quad[1].0 + quad[2].0 + quad[3].0) * 0.25;
+        let cy = (quad[0].1 + quad[1].1 + quad[2].1 + quad[3].1) * 0.25;
+        let dist_sq = (cx - tap_x) * (cx - tap_x) + (cy - tap_y) * (cy - tap_y);
+        let dominated = best
+            .map(|(_, bd, bd_dist)| depth > bd + 1e-4 || (depth - bd).abs() <= 1e-4 && dist_sq >= bd_dist)
+            .unwrap_or(false);
         if !dominated {
-            best = Some((card.index, depth));
+            best = Some((card.index, depth, dist_sq));
         }
     }
-    best.map(|(i, _)| i)
+    best.map(|(i, _, _)| i)
 }
 
 pub fn go_to_card_angle(theta: f32) -> f32 {
