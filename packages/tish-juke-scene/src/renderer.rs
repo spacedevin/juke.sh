@@ -167,6 +167,8 @@ pub struct SceneState {
     pub zoom_target: Option<f32>,
     pub queued_bits: u64,
     pub touch_active: bool,
+    /// Set when native selection changes; drained on display link (never flush during gestures).
+    pub selection_dirty: bool,
 }
 
 pub struct DrumRenderer {
