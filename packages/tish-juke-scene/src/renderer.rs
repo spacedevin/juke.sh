@@ -28,9 +28,20 @@ struct SceneUniforms {
     float time;
     float neon_intensity;
     float show_categories;
+    float zoom_display;
+    float dir_light_az;
+    float neon_emissive;
+    float _pad0;
+    float3 neon_color1;
+    float _pad1;
+    float3 neon_color2;
+    float _pad2;
     float3 active_accent;
+    float _pad3;
     float3 active_bg;
+    float _pad4;
     float3 active_alt;
+    float _pad5;
 };
 
 struct CardUniforms {
@@ -43,6 +54,8 @@ struct SolidIn {
     float3 position [[attribute(0)]];
     float3 color [[attribute(1)]];
     float emissive [[attribute(2)]];
+    float3 normal [[attribute(3)]];
+    float flags [[attribute(4)]];
 };
 
 struct TexIn {
@@ -51,12 +64,16 @@ struct TexIn {
     float slot_index [[attribute(2)]];
     float2 local_uv [[attribute(3)]];
     float is_empty [[attribute(4)]];
+    float3 normal [[attribute(5)]];
 };
 
 struct SolidOut {
     float4 position [[position]];
     float3 color;
     float emissive;
+    float3 world_pos;
+    float3 world_normal;
+    float flags;
 };
 
 struct TexOut {
@@ -65,6 +82,8 @@ struct TexOut {
     float slot_index;
     float2 local_uv;
     float is_empty;
+    float3 world_pos;
+    float3 world_normal;
 };
 
 float3 rotate_y(float3 p, float a) {
@@ -88,42 +107,143 @@ bool slot_is_queued(int idx, constant CardUniforms& cu) {
     return ((cu.queued[word] >> bit) & 1u) != 0u;
 }
 
-float3 apply_lighting(float3 base, float emissive, constant SceneUniforms& u) {
+float ftt(float fit, float tight, float z) {
+    return fit + (tight - fit) * z;
+}
+
+float3 shade_surface(float3 base, float3 world_pos, float3 world_normal, float emissive,
+                     constant SceneUniforms& u) {
     float L = u.lighting;
-    float3 warm = float3(1.0, 0.85, 0.65);
-    float3 cool = float3(0.6, 0.85, 1.0);
-    float3 ambient = mix(warm * 0.55, cool * 0.12 + float3(0.02, 0.02, 0.10), L);
-    float3 lit = base * ambient + emissive * u.neon_intensity;
-    if (u.active_slot >= 0.0 && L > 0.25) {
+    float z = u.zoom_display;
+    float3 N = normalize(world_normal);
+
+    float d_hemi = ftt(0.95, 0.0, z);
+    float d_dir = ftt(1.5, 0.0, z);
+    float d_amb = ftt(0.0, 1.1, z);
+    float d_cam = ftt(0.0, 0.4, z);
+
+    float r_hemi;
+    float r_dir;
+    bool has_active = u.active_slot >= 0.0;
+    if (has_active && L > 0.25) {
+        r_hemi = ftt(0.05, 0.0, z);
+        r_dir = ftt(0.05, 0.0, z);
+    } else {
+        r_hemi = ftt(0.15, 0.0, z);
+        r_dir = ftt(0.25, 0.0, z);
+    }
+
+    float hemi_i = mix(d_hemi, r_hemi, L);
+    float dir_i = mix(d_dir, r_dir, L);
+    float amb_i = d_amb * (1.0 - L);
+    float cam_i = d_cam * (1.0 - L);
+
+    float3 warm_sky = float3(1.0, 0.98, 0.94);
+    float3 cool_sky = float3(0.55, 0.65, 0.85);
+    float3 sky = mix(warm_sky, cool_sky, L * 0.6);
+    float3 ground = mix(float3(0.12, 0.10, 0.08), float3(0.02, 0.02, 0.06), L);
+    float hemi_factor = dot(N, float3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+    float3 hemi_lit = mix(ground, sky, hemi_factor) * hemi_i;
+
+    float az = u.dir_light_az;
+    float3 light_pos = float3(sin(az) * 100.0, 100.0, cos(az) * 100.0);
+    float3 light_dir = normalize(-light_pos);
+    float3 dir_col = mix(float3(1.0, 0.93, 0.87), (u.neon_color1 + u.neon_color2) * 0.5, L * 0.5);
+    float NdotL = max(dot(N, light_dir), 0.0);
+    float3 diffuse = dir_col * NdotL * dir_i;
+
+    float3 amb_warm = float3(1.0, 0.88, 0.72);
+    float3 ambient = amb_warm * amb_i * 0.35;
+
+    float az_off = az + 1.2566370614359172;
+    float3 fill_pos = float3(sin(az_off) * 35.0, 22.0, cos(az_off) * 35.0);
+    float3 to_center = normalize(float3(0.0, 0.15, 0.0) - fill_pos);
+    float fill_front = max(dot(N, to_center), 0.0) * L * 0.30 * z;
+    float3 fill_amber = float3(1.0, 0.85, 0.6) * fill_front;
+
+    float3 fill_pink_dir = normalize(float3(12.0, 18.0, -8.0));
+    float fill_pink = max(dot(N, fill_pink_dir), 0.0) * L * 1.4 * 0.12 * z;
+    float3 pink = float3(1.0, 0.4, 0.7) * fill_pink;
+
+    float3 cam_pos = float3(0.45, 0.15, -u.cam_dist);
+    float3 cam_dir = normalize(float3(0.0, 0.0, 0.0) - cam_pos);
+    float cam_fill = max(dot(N, cam_dir), 0.0) * cam_i * 0.5;
+    float3 cam_lit = float3(1.0, 0.9, 0.75) * cam_fill;
+
+    float3 lit = base * (hemi_lit + diffuse + ambient + fill_amber + pink + cam_lit);
+
+    if (emissive > 1.5) {
+        float3 neon_c = mix(u.neon_color1, u.neon_color2, step(0.0, world_pos.y));
+        lit += neon_c * emissive * u.neon_intensity * 0.12;
+    } else if (emissive > 0.01) {
+        lit += base * emissive * u.neon_emissive * 0.35;
+    }
+
+    if (has_active && L > 0.25) {
         float cycle = (sin(u.time * 1.5) + 1.0) * 0.5;
         float3 accent_mix = mix(u.active_accent, u.active_bg, cycle);
-        lit = mix(lit, lit * accent_mix * 1.4, L * 0.35);
+        lit = mix(lit, lit * accent_mix * 1.35, L * 0.30);
     }
+
     return lit;
 }
 
 vertex SolidOut solid_vertex(SolidIn in [[stage_in]], constant SceneUniforms& u [[buffer(1)]]) {
     SolidOut vert;
-    float3 wp = rotate_y(in.position, u.angle);
+    float3 wp;
+    float3 wn;
+    if (in.flags > 0.5) {
+        wp = in.position;
+        wn = in.normal;
+    } else {
+        wp = rotate_y(in.position, u.angle);
+        wn = rotate_y(in.normal, u.angle);
+    }
     vert.position = project(wp, u);
     vert.color = in.color;
     vert.emissive = in.emissive;
+    vert.world_pos = wp;
+    vert.world_normal = wn;
+    vert.flags = in.flags;
     return vert;
 }
 
 fragment float4 solid_fragment(SolidOut in [[stage_in]], constant SceneUniforms& u [[buffer(1)]]) {
-    float3 rgb = apply_lighting(in.color, in.emissive, u);
+    float3 base = in.color;
+    if (in.flags > 0.5 && in.flags < 1.5) {
+        float2 uv = in.world_pos.xz / 25.0;
+        float2 cell = floor(uv);
+        float checker = fmod(cell.x + cell.y, 2.0);
+        base = mix(float3(0.02, 0.02, 0.02), float3(0.91, 0.91, 0.91), checker);
+        base *= float3(0.70, 0.72, 0.75);
+        float dist = length(in.world_pos.xz);
+        float drum_shadow = smoothstep(14.0, 4.0, dist);
+        base *= mix(1.0, 0.38, drum_shadow);
+    }
+    float3 rgb = shade_surface(base, in.world_pos, in.world_normal, in.emissive, u);
     return float4(rgb, 1.0);
+}
+
+fragment float4 glass_fragment(SolidOut in [[stage_in]], constant SceneUniforms& u [[buffer(1)]]) {
+    float fresnel = pow(1.0 - abs(dot(normalize(in.world_normal),
+        normalize(float3(0.0, 0.15, -u.cam_dist) - in.world_pos))), 2.0);
+    float3 base = mix(in.color, float3(0.85, 0.92, 1.0), 0.35);
+    float3 rgb = shade_surface(base, in.world_pos, in.world_normal, 0.05, u);
+    rgb += float3(0.4, 0.55, 0.7) * fresnel * 0.25;
+    return float4(rgb, 0.20 + fresnel * 0.15);
 }
 
 vertex TexOut tex_vertex(TexIn in [[stage_in]], constant SceneUniforms& u [[buffer(1)]]) {
     TexOut vert;
     float3 wp = rotate_y(in.position, u.angle);
+    float3 wn = rotate_y(in.normal, u.angle);
     vert.position = project(wp, u);
     vert.uv = in.uv;
     vert.slot_index = in.slot_index;
     vert.local_uv = in.local_uv;
     vert.is_empty = in.is_empty;
+    vert.world_pos = wp;
+    vert.world_normal = wn;
     return vert;
 }
 
@@ -156,7 +276,8 @@ fragment float4 tex_fragment(TexOut in [[stage_in]],
     }
     float3 cyan = float3(0.0, 0.95, 1.0);
     c.rgb = mix(c.rgb, cyan, glow);
-    return float4(apply_lighting(c.rgb, glow * 0.6, u), c.a);
+    float3 rgb = shade_surface(c.rgb, in.world_pos, in.world_normal, glow * 0.6, u);
+    return float4(rgb, c.a);
 }
 
 fragment float4 cat_fragment(TexOut in [[stage_in]],
@@ -166,7 +287,8 @@ fragment float4 cat_fragment(TexOut in [[stage_in]],
     if (u.show_categories < 0.5) { discard_fragment(); }
     float4 c = cat_atlas.sample(cat_sm, in.uv);
     if (c.a < 0.05) { discard_fragment(); }
-    return float4(apply_lighting(c.rgb, 0.35, u), c.a);
+    float3 rgb = shade_surface(c.rgb, in.world_pos, in.world_normal, 0.35, u);
+    return float4(rgb, c.a);
 }
 "#;
 
@@ -176,6 +298,8 @@ struct SolidVertex {
     position: [f32; 3],
     color: [f32; 3],
     emissive: f32,
+    normal: [f32; 3],
+    flags: f32,
 }
 
 #[repr(C)]
@@ -186,6 +310,7 @@ struct TexVertex {
     slot_index: f32,
     local_uv: [f32; 2],
     is_empty: f32,
+    normal: [f32; 3],
 }
 
 #[repr(C)]
@@ -200,8 +325,13 @@ struct SceneUniforms {
     time: f32,
     neon_intensity: f32,
     show_categories: f32,
+    zoom_display: f32,
+    dir_light_az: f32,
+    neon_emissive: f32,
     _pad0: f32,
+    neon_color1: [f32; 3],
     _pad1: f32,
+    neon_color2: [f32; 3],
     _pad2: f32,
     active_accent: [f32; 3],
     _pad3: f32,
@@ -262,14 +392,17 @@ struct MeshBatch {
     vertex_buffer: Buffer,
     index_buffer: Buffer,
     index_count: u32,
-    /// When true, skip this batch (e.g. opaque glass shell placeholder).
+    /// When true, skip this batch.
     skip: bool,
+    /// When true, draw with alpha-blended glass pipeline.
+    glass: bool,
 }
 
 pub struct DrumRenderer {
     device: Device,
     queue: CommandQueue,
     solid_pipeline: metal::RenderPipelineState,
+    glass_pipeline: Option<metal::RenderPipelineState>,
     tex_pipeline: Option<metal::RenderPipelineState>,
     cat_pipeline: Option<metal::RenderPipelineState>,
     depth: metal::DepthStencilState,
@@ -313,12 +446,21 @@ impl DrumRenderer {
             emissive.set_format(metal::MTLVertexFormat::Float);
             emissive.set_offset(24);
             emissive.set_buffer_index(0);
+            let normal = vd.attributes().object_at(3).unwrap();
+            normal.set_format(metal::MTLVertexFormat::Float3);
+            normal.set_offset(28);
+            normal.set_buffer_index(0);
+            let flags = vd.attributes().object_at(4).unwrap();
+            flags.set_format(metal::MTLVertexFormat::Float);
+            flags.set_offset(40);
+            flags.set_buffer_index(0);
             let layout = vd.layouts().object_at(0).unwrap();
-            layout.set_stride(28);
+            layout.set_stride(44);
             layout.set_step_function(MTLVertexStepFunction::PerVertex);
             vd
         };
         let solid_pipeline = build_solid_pipeline(&device, &library, &solid_layout)?;
+        let glass_pipeline = build_glass_pipeline(&device, &library, &solid_layout);
 
         let depth_desc = metal::DepthStencilDescriptor::new();
         depth_desc.set_depth_compare_function(metal::MTLCompareFunction::Less);
@@ -402,8 +544,12 @@ impl DrumRenderer {
             empty.set_format(metal::MTLVertexFormat::Float);
             empty.set_offset(32);
             empty.set_buffer_index(0);
+            let normal = vd.attributes().object_at(5).unwrap();
+            normal.set_format(metal::MTLVertexFormat::Float3);
+            normal.set_offset(36);
+            normal.set_buffer_index(0);
             let layout = vd.layouts().object_at(0).unwrap();
-            layout.set_stride(36);
+            layout.set_stride(48);
             layout.set_step_function(MTLVertexStepFunction::PerVertex);
             vd
         };
@@ -444,6 +590,7 @@ impl DrumRenderer {
             device,
             queue,
             solid_pipeline,
+            glass_pipeline,
             tex_pipeline,
             cat_pipeline,
             depth,
@@ -482,6 +629,15 @@ impl DrumRenderer {
                 radius: s.radius,
             };
             let neon = 0.5 + s.lighting * 5.0;
+            let neon_emissive = 1.0 + s.lighting * 3.5;
+            let (neon_color1, neon_color2) = compute_neon_colors(
+                s.time,
+                s.lighting,
+                s.active_slot.is_some(),
+                s.active_accent,
+                s.active_bg,
+                s.active_alt,
+            );
             let mut queued = [0u32; 16];
             for (i, w) in s.queued_mask.iter().take(16).enumerate() {
                 queued[i] = *w;
@@ -496,8 +652,13 @@ impl DrumRenderer {
                 time: s.time,
                 neon_intensity: neon,
                 show_categories: if s.show_categories { 1.0 } else { 0.0 },
+                zoom_display: s.zoom_display,
+                dir_light_az: 0.0,
+                neon_emissive,
                 _pad0: 0.0,
+                neon_color1,
                 _pad1: 0.0,
+                neon_color2,
                 _pad2: 0.0,
                 active_accent: s.active_accent,
                 _pad3: 0.0,
@@ -525,7 +686,7 @@ impl DrumRenderer {
         ca.set_texture(Some(texture));
         ca.set_load_action(MTLLoadAction::Clear);
         ca.set_store_action(MTLStoreAction::Store);
-        ca.set_clear_color(MTLClearColor::new(0.04, 0.02, 0.06, 1.0));
+        ca.set_clear_color(MTLClearColor::new(10.0 / 255.0, 5.0 / 255.0, 8.0 / 255.0, 1.0));
         let da = pass.depth_attachment().unwrap();
         da.set_texture(Some(depth));
         da.set_load_action(MTLLoadAction::Clear);
@@ -548,7 +709,7 @@ impl DrumRenderer {
 
         enc.set_render_pipeline_state(&self.solid_pipeline);
         for batch in &self.drum_batches {
-            if batch.skip || batch.index_count == 0 {
+            if batch.skip || batch.glass || batch.index_count == 0 {
                 continue;
             }
             enc.set_vertex_buffer(0, Some(&batch.vertex_buffer), 0);
@@ -606,6 +767,23 @@ impl DrumRenderer {
             }
         }
 
+        if let Some(glass_pipe) = self.glass_pipeline.as_ref() {
+            enc.set_render_pipeline_state(glass_pipe);
+            for batch in &self.drum_batches {
+                if batch.skip || !batch.glass || batch.index_count == 0 {
+                    continue;
+                }
+                enc.set_vertex_buffer(0, Some(&batch.vertex_buffer), 0);
+                enc.draw_indexed_primitives(
+                    MTLPrimitiveType::Triangle,
+                    batch.index_count as u64,
+                    MTLIndexType::UInt16,
+                    &batch.index_buffer,
+                    0,
+                );
+            }
+        }
+
         enc.end_encoding();
         cmd.present_drawable(drawable);
         cmd.commit();
@@ -651,6 +829,28 @@ fn build_solid_pipeline(
         .object_at(0)
         .unwrap()
         .set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+    d.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
+    device.new_render_pipeline_state(&d).ok()
+}
+
+fn build_glass_pipeline(
+    device: &Device,
+    library: &metal::Library,
+    layout: &metal::VertexDescriptorRef,
+) -> Option<metal::RenderPipelineState> {
+    let vfn = library.get_function("solid_vertex", None).ok()?;
+    let ffn = library.get_function("glass_fragment", None).ok()?;
+    let mut d = RenderPipelineDescriptor::new();
+    d.set_vertex_function(Some(&vfn));
+    d.set_fragment_function(Some(&ffn));
+    d.set_vertex_descriptor(Some(layout));
+    let ca = d.color_attachments().object_at(0).unwrap();
+    ca.set_pixel_format(MTLPixelFormat::BGRA8Unorm);
+    ca.set_blending_enabled(true);
+    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
     d.set_depth_attachment_pixel_format(MTLPixelFormat::Depth32Float);
     device.new_render_pipeline_state(&d).ok()
 }
@@ -714,15 +914,21 @@ fn push_quad(
     p3: [f32; 3],
     color: [f32; 3],
     emissive: f32,
+    normal: [f32; 3],
+    flags: f32,
 ) {
     let base = vertices.len() as u16;
     vertices.extend_from_slice(&[
-        SolidVertex { position: p0, color, emissive },
-        SolidVertex { position: p1, color, emissive },
-        SolidVertex { position: p2, color, emissive },
-        SolidVertex { position: p3, color, emissive },
+        SolidVertex { position: p0, color, emissive, normal, flags },
+        SolidVertex { position: p1, color, emissive, normal, flags },
+        SolidVertex { position: p2, color, emissive, normal, flags },
+        SolidVertex { position: p3, color, emissive, normal, flags },
     ]);
     indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+}
+
+fn radial_normal(angle: f32) -> [f32; 3] {
+    [angle.cos(), 0.0, angle.sin()]
 }
 
 fn build_cylinder_ring(
@@ -749,18 +955,39 @@ fn build_cylinder_ring(
             [a0.cos() * outer, y + tube * 0.5, a0.sin() * outer],
             color,
             emissive,
+            radial_normal((a0 + a1) * 0.5),
+            0.0,
         );
     }
 }
 
 fn build_drum_batches(device: &Device, radius: f32, half_h: f32, cols: u32) -> Vec<MeshBatch> {
     let segments = 48usize;
+    let floor_y = -half_h - 3.0;
+    let floor_half = 200.0;
+
+    let mut floor_v = Vec::new();
+    let mut floor_i = Vec::new();
+    push_quad(
+        &mut floor_v,
+        &mut floor_i,
+        [-floor_half, floor_y, -floor_half],
+        [floor_half, floor_y, -floor_half],
+        [floor_half, floor_y, floor_half],
+        [-floor_half, floor_y, floor_half],
+        [0.67, 0.67, 0.67],
+        0.0,
+        [0.0, 1.0, 0.0],
+        1.0,
+    );
+
     let mut body_v = Vec::new();
     let mut body_i = Vec::new();
     let body_color = [0.07, 0.07, 0.07];
     for seg in 0..segments {
         let a0 = (seg as f32 / segments as f32) * PI * 2.0;
         let a1 = ((seg + 1) as f32 / segments as f32) * PI * 2.0;
+        let n = radial_normal((a0 + a1) * 0.5);
         push_quad(
             &mut body_v,
             &mut body_i,
@@ -769,6 +996,8 @@ fn build_drum_batches(device: &Device, radius: f32, half_h: f32, cols: u32) -> V
             [a1.cos() * radius, half_h, a1.sin() * radius],
             [a0.cos() * radius, half_h, a0.sin() * radius],
             body_color,
+            0.0,
+            n,
             0.0,
         );
     }
@@ -817,6 +1046,8 @@ fn build_drum_batches(device: &Device, radius: f32, half_h: f32, cols: u32) -> V
             [a0.cos() * glass_r, half_h + 1.0, a0.sin() * glass_r],
             [0.9, 0.9, 0.95],
             0.05,
+            radial_normal((a0 + a1) * 0.5),
+            0.0,
         );
     }
 
@@ -843,10 +1074,12 @@ fn build_drum_batches(device: &Device, radius: f32, half_h: f32, cols: u32) -> V
             [bx - hw, hh, bz + 0.1],
             color,
             emissive,
+            radial_normal(theta),
+            0.0,
         );
     }
 
-    fn make_batch(device: &Device, v: &[SolidVertex], i: &[u16], skip: bool) -> MeshBatch {
+    fn make_batch(device: &Device, v: &[SolidVertex], i: &[u16], skip: bool, glass: bool) -> MeshBatch {
         MeshBatch {
             vertex_buffer: device.new_buffer_with_data(
                 v.as_ptr() as *const _,
@@ -860,15 +1093,17 @@ fn build_drum_batches(device: &Device, radius: f32, half_h: f32, cols: u32) -> V
             ),
             index_count: i.len() as u32,
             skip,
+            glass,
         }
     }
 
     vec![
-        make_batch(device, &body_v, &body_i, false),
-        make_batch(device, &gold_v, &gold_i, false),
-        make_batch(device, &neon_v, &neon_i, false),
-        make_batch(device, &glass_v, &glass_i, true),
-        make_batch(device, &bracket_v, &bracket_i, false),
+        make_batch(device, &floor_v, &floor_i, false, false),
+        make_batch(device, &body_v, &body_i, false, false),
+        make_batch(device, &gold_v, &gold_i, false, false),
+        make_batch(device, &neon_v, &neon_i, false, false),
+        make_batch(device, &bracket_v, &bracket_i, false, false),
+        make_batch(device, &glass_v, &glass_i, false, true),
     ]
 }
 
@@ -903,6 +1138,7 @@ fn build_card_mesh(cards: &[CardInstance], card_w: f32, card_h: f32) -> (Vec<Tex
         let base = vertices.len() as u16;
         let slot_index = card.slot_index as f32;
         let is_empty = if card.empty { 1.0 } else { 0.0 };
+        let normal = [card.theta.sin(), 0.0, card.theta.cos()];
         for i in 0..4 {
             let wp = transform_card_point(locals[i], card);
             let lu = uvs[i][0];
@@ -915,6 +1151,7 @@ fn build_card_mesh(cards: &[CardInstance], card_w: f32, card_h: f32) -> (Vec<Tex
                 slot_index,
                 local_uv: [lu, lv],
                 is_empty,
+                normal,
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -966,6 +1203,7 @@ fn build_category_mesh(scene: &PreparedScene) -> (Vec<TexVertex>, Vec<u16>) {
         let locals = [[-hw, -hh, 0.0], [hw, -hh, 0.0], [hw, hh, 0.0], [-hw, hh, 0.0]];
         let uvs = [[0.0, v1], [1.0, v1], [1.0, v0], [0.0, v0]];
         let base = vertices.len() as u16;
+        let normal = [card.theta.sin(), 0.0, card.theta.cos()];
         for i in 0..4 {
             let wp = transform_card_point(locals[i], &card);
             vertices.push(TexVertex {
@@ -974,6 +1212,7 @@ fn build_category_mesh(scene: &PreparedScene) -> (Vec<TexVertex>, Vec<u16>) {
                 slot_index: -1.0,
                 local_uv: [0.0, 0.0],
                 is_empty: 0.0,
+                normal,
             });
         }
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
@@ -982,3 +1221,54 @@ fn build_category_mesh(scene: &PreparedScene) -> (Vec<TexVertex>, Vec<u16>) {
 }
 
 const CARD_RADIAL_OFFSET: f32 = 0.12;
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h * 6.0;
+    let x = c * (1.0 - ((hp % 2.0) - 1.0).abs());
+    let (r1, g1, b1) = if hp < 1.0 {
+        (c, x, 0.0)
+    } else if hp < 2.0 {
+        (x, c, 0.0)
+    } else if hp < 3.0 {
+        (0.0, c, x)
+    } else if hp < 4.0 {
+        (0.0, x, c)
+    } else if hp < 5.0 {
+        (x, 0.0, c)
+    } else {
+        (c, 0.0, x)
+    };
+    let m = l - c * 0.5;
+    [r1 + m, g1 + m, b1 + m]
+}
+
+fn compute_neon_colors(
+    time: f32,
+    lighting: f32,
+    has_active: bool,
+    accent: [f32; 3],
+    bg: [f32; 3],
+    alt: [f32; 3],
+) -> ([f32; 3], [f32; 3]) {
+    let (r1, r2) = if has_active && lighting > 0.25 {
+        let cycle = (time * 1.5).sin() * 0.5 + 0.5;
+        (lerp3(accent, bg, cycle), lerp3(bg, alt, 1.0 - cycle))
+    } else {
+        (
+            hsl_to_rgb((time * 0.1) % 1.0, 0.95, 0.55),
+            hsl_to_rgb(((time * 0.1) + 0.5) % 1.0, 0.95, 0.55),
+        )
+    };
+    let d1 = [1.0, 0.933, 0.867];
+    let d2 = [0.667, 0.933, 1.0];
+    (lerp3(d1, r1, lighting), lerp3(d2, r2, lighting))
+}
