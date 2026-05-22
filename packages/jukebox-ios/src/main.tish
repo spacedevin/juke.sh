@@ -2,10 +2,10 @@
 //
 // Build: `just run-jukebox-ios-sim` from jukebox repo root.
 
-import { ios, useState, useEffect, useMemo } from "tish:ios"
+import { ios, useState, useEffect } from "tish:ios"
 import { setTimeout, clearTimeout } from "tish:timers"
 import { isLoggedIn } from "tish:spotify-ios"
-import { version as sceneVersion, getActiveIndex } from "tish:juke-scene"
+import { version as sceneVersion } from "tish:juke-scene"
 import {
   generateDebugTracks,
   DEFAULT_ROWS,
@@ -26,9 +26,7 @@ fn App() {
   let [scene, setScene] = useState(null)
   let [builder, setBuilder] = useState(null)
   let [spin, setSpin] = useState(0.35)
-  let [queued, setQueued] = useState({})
   let loggedIn = isLoggedIn()
-  let activeIdx = getActiveIndex()
 
   let prepareKey = builder === null ? -1 : builder.slotIndex
 
@@ -53,7 +51,6 @@ fn App() {
       return
     }
     setScene(null)
-    setQueued({})
     setTimeout(() => {
       setBuilder(createSceneBuilder(debugTracks, DEFAULT_ROWS, SCENE_SEED))
     }, 0)
@@ -75,30 +72,6 @@ fn App() {
     setSpin(0)
   }
 
-  fn queuedIndices() {
-    let out = []
-    let keys = Object.keys(queued)
-    let i = 0
-    while (i < keys.length) {
-      if (queued[keys[i]]) { out.push(parseInt(keys[i])) }
-      i = i + 1
-    }
-    return out
-  }
-
-  let activeLabel = "—"
-  if (activeIdx >= 0 && scene !== null && scene.cells !== null) {
-    let cell = scene.cells[activeIdx]
-    if (cell !== null) {
-      let pos = String(cell.c) + "," + String(cell.r)
-      if (cell.titleA) {
-        activeLabel = "#" + activeIdx + " · " + pos + " · " + cell.titleA
-      } else {
-        activeLabel = "#" + activeIdx + " · " + pos
-      }
-    }
-  }
-
   let prepareProgress = builder !== null ? builderProgress(builder) : null
   let sceneLabel = prepareProgress !== null
     ? ("prep " + prepareProgress.cards + "/" + prepareProgress.tracks)
@@ -107,33 +80,17 @@ fn App() {
       : (scene.cols + "x" + scene.rows + " · " + scene.cells.length + " cards"))
   let loadLabel = builder !== null ? "Preparing…" : (scene === null ? "Load scene" : "Reload")
 
-  let statusLine = "juke.sh · " + sceneVersion + " · " + sceneLabel
-    + " · Active: " + activeLabel
-    + " · Queued: " + queuedIndices().length
+  let metaLine = "juke.sh · " + sceneVersion + " · " + sceneLabel
     + " · Spin: " + spin
     + " · Spotify: " + (loggedIn ? "in" : "out")
 
   return (
-    <div>
-      <p>{statusLine}</p>
+    <div paddingTop={56} paddingLeft={10} paddingRight={10}>
+      <p>{metaLine}</p>
       <SceneView
         height={420}
         scene={scene}
         spin={spin}
-        queued={queuedIndices()}
-        onCardQueue={(idx) => {
-          let on = queued[idx] !== true
-          let next = {}
-          let keys = Object.keys(queued)
-          let i = 0
-          while (i < keys.length) {
-            let k = parseInt(keys[i])
-            if (k !== idx && queued[k]) { next[k] = true }
-            i = i + 1
-          }
-          if (on) { next[idx] = true }
-          setQueued(next)
-        }}
       />
       <row>
         <button onClick={() => loadScene()}>{loadLabel}</button>

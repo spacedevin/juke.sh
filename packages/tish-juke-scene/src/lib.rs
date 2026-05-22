@@ -54,10 +54,22 @@ pub fn juke_scene_object() -> Value {
         }
     });
 
+    let get_queued_count = Value::native(|_args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            return Value::Number(view::queued_card_count() as f64);
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            Value::Number(0.0)
+        }
+    });
+
     let mut m = ObjectMap::default();
     m.insert(Arc::from("createSceneView"), create);
     m.insert(Arc::from("debugSceneParse"), debug_parse);
     m.insert(Arc::from("getActiveIndex"), get_active_index);
+    m.insert(Arc::from("getQueuedCount"), get_queued_count);
     m.insert(
         Arc::from("version"),
         Value::String("0.4.0-scene-port".into()),

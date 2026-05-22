@@ -94,6 +94,14 @@ fn project_card_quad(
     Some((screen, depth))
 }
 
+fn card_faces_camera(card: &CardInstance, angle: f32) -> bool {
+    // Outward horizontal normal at the slot; after scene rotation it must point toward +Z camera.
+    let nx = card.theta.sin();
+    let nz = card.theta.cos();
+    let normal = rotate_y([nx, 0.0, nz], angle);
+    normal[2] > 0.08
+}
+
 /// Pick the front-most card under a UIKit tap point (top-left origin, points).
 pub fn pick_card_at_point(
     scene: &PreparedScene,
@@ -122,6 +130,9 @@ pub fn pick_card_at_point(
 
     let mut best: Option<(usize, f32, f32)> = None;
     for card in &scene.cards {
+        if !card_faces_camera(card, angle) {
+            continue;
+        }
         let Some((quad, depth)) =
             project_card_quad(card, &corners, angle, cam_dist, aspect, view_w, view_h)
         else {
