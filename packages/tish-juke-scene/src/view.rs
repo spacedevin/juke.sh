@@ -14,7 +14,7 @@ use objc2_metal::MTLCreateSystemDefaultDevice;
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CACurrentMediaTime, CADisplayLink, CAMetalLayer};
 use objc2_ui_kit::{
-    UIColor, UIEvent, UILabel, UITouch, UIView, UIViewAutoresizing,
+    UIColor, UIEvent, UIFont, UILabel, UITouch, UIView, UIViewAutoresizing,
 };
 
 use tish_apple_common::scene_host::register_scene_view_factory;
@@ -100,13 +100,31 @@ pub struct HostIvars {
     pan_target: Retained<JukeScenePanTarget>,
 }
 
-fn status_line_for_state(state: &Arc<Mutex<SceneState>>) -> String {
-    let s = state.lock().unwrap();
-    let active = s
-        .active_index
-        .map(|i| format!("#{i}"))
-        .unwrap_or_else(|| "—".to_string());
+fn truncate_title(title: &str, max_chars: usize) -> String {
+    let count = title.chars().count();
+    if count <= max_chars {
+        return title.to_string();
+    }
+    let mut out: String = title.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+fn status_line_for_host(host: &SceneHost) -> String {
+    let s = host.state.lock().unwrap();
     let queued = s.queued_bits.count_ones();
+    let active = match s.active_index {
+        None => "—".to_string(),
+        Some(idx) => host
+            .prepared
+            .as_ref()
+            .and_then(|p| p.cards.iter().find(|c| c.index == idx))
+            .map(|card| {
+                let title = truncate_title(&card.title, 16);
+                format!("#{idx} · {},{} · {title}", card.c, card.r)
+            })
+            .unwrap_or_else(|| format!("#{idx}")),
+    };
     format!("Active: {active} · Queued: {queued}")
 }
 
@@ -116,7 +134,7 @@ fn sync_status_label(view: &JukeSceneHostView) {
         .host
         .borrow()
         .as_ref()
-        .map(|host| status_line_for_state(&host.state))
+        .map(status_line_for_host)
         .unwrap_or_else(|| "Active: — · Queued: 0".to_string());
     view.ivars()
         .pick_label
@@ -520,11 +538,6 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
                 s.drag_velocity = 0.0;
             }
             s.spin = spin;
-            if let Some(active) = s.active_index {
-                if active < 64 {
-                    s.queued_bits &= !(1u64 << active);
-                }
-            }
         }
     }
     sync_status_label(view);
@@ -611,6 +624,9 @@ fn create_scene_host_view(
     unsafe {
         pick_label.setTextColor(Some(&UIColor::whiteColor()));
         pick_label.setBackgroundColor(Some(&UIColor::blackColor()));
+        pick_label.setFont(Some(&UIFont::systemFontOfSize(13.0)));
+        pick_label.setAdjustsFontSizeToFitWidth(true);
+        pick_label.setMinimumScaleFactor(0.65);
     }
     pick_label.setUserInteractionEnabled(false);
 

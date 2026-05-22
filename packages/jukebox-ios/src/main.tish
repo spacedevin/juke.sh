@@ -85,10 +85,10 @@ fn App() {
     + " · Spotify: " + (loggedIn ? "in" : "out")
 
   return (
-    <div paddingTop={56} paddingLeft={10} paddingRight={10}>
+    <div paddingTop={52} paddingLeft={10} paddingRight={10} paddingBottom={12}>
       <p>{metaLine}</p>
       <SceneView
-        height={420}
+        height={400}
         scene={scene}
         spin={spin}
       />

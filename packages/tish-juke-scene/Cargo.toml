@@ -19,6 +19,7 @@ objc2-ui-kit = { version = "0.3", default-features = true, features = [
     "UITouch",
     "UIEvent",
     "UILabel",
+    "UIFont",
 ] }
 objc2-metal = { version = "0.3", default-features = true, features = ["MTLDevice", "MTLPixelFormat"] }
 objc2-quartz-core = { version = "0.3", default-features = true, features = [
