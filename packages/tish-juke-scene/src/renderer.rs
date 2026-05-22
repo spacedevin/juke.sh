@@ -92,9 +92,9 @@ float3 apply_lighting(float3 base, float emissive, constant SceneUniforms& u) {
     float L = u.lighting;
     float3 warm = float3(1.0, 0.85, 0.65);
     float3 cool = float3(0.6, 0.85, 1.0);
-    float3 ambient = mix(warm * 0.35, float3(0.02, 0.02, 0.08), L);
+    float3 ambient = mix(warm * 0.55, cool * 0.12 + float3(0.02, 0.02, 0.10), L);
     float3 lit = base * ambient + emissive * u.neon_intensity;
-    if (u.active_slot >= 0.0 && L > 0.3) {
+    if (u.active_slot >= 0.0 && L > 0.25) {
         float cycle = (sin(u.time * 1.5) + 1.0) * 0.5;
         float3 accent_mix = mix(u.active_accent, u.active_bg, cycle);
         lit = mix(lit, lit * accent_mix * 1.4, L * 0.35);
@@ -156,9 +156,7 @@ fragment float4 tex_fragment(TexOut in [[stage_in]],
     }
     float3 cyan = float3(0.0, 0.95, 1.0);
     c.rgb = mix(c.rgb, cyan, glow);
-    float L = u.lighting;
-    c.rgb = mix(c.rgb, c.rgb * float3(1.0, 0.85, 0.65), (1.0 - L) * 0.15);
-    return c;
+    return float4(apply_lighting(c.rgb, glow * 0.6, u), c.a);
 }
 
 fragment float4 cat_fragment(TexOut in [[stage_in]],
@@ -242,6 +240,7 @@ pub struct SceneState {
     pub active_slot: Option<usize>,
     pub angle_target: Option<f32>,
     pub zoom_target: Option<f32>,
+    pub zoom_pending_after_snap: bool,
     pub queued_mask: Vec<u32>,
     pub total_slots: u32,
     pub touch_active: bool,

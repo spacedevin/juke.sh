@@ -19,9 +19,9 @@ use tish_apple_common::scene_host::register_scene_view_factory;
 use tishlang_core::ObjectMap;
 
 use crate::audio::{play_selection_sound, set_audio_enabled};
-use crate::hit_test::{go_to_card_angle, pick_card_at_point, PickCamera};
+use crate::hit_test::{snap_angle_for_picked, pick_card_at_point, PickCamera};
 use crate::renderer::{DrumRenderer, DragAxis, SceneState};
-use crate::scene_data::{parse_scene, queue_words_for_slots, scene_fingerprint, PreparedScene};
+use crate::scene_data::{parse_scene, queue_words_for_slots, scene_fingerprint, grid_slot_theta, PreparedScene};
 
 const TAP_DRAG_THRESHOLD: f32 = 8.0;
 const ZOOM_AUTO_THRESHOLD: f32 = 0.5;
@@ -59,6 +59,7 @@ fn begin_touch(state: &Arc<Mutex<SceneState>>) {
     s.press_started_at = Some(CACurrentMediaTime());
     s.angle_target = None;
     s.zoom_target = None;
+    s.zoom_pending_after_snap = false;
     s.drag_velocity = 0.0;
     s.drag_axis = DragAxis::None;
 }
@@ -421,23 +422,21 @@ impl JukeScenePanTarget {
             return false;
         };
         let cam = pick_camera(&state);
-        let Some(slot) = pick_card_at_point(&prepared, cam, px, py, vw, vh) else {
-            return false;
-        };
-        let Some(card) = prepared.cards.iter().find(|c| c.slot_index == slot) else {
+        let Some(picked) = pick_card_at_point(&prepared, cam, px, py, vw, vh) else {
             return false;
         };
         {
             let mut s = state.lock().unwrap();
-            s.active_slot = Some(slot);
-            s.active_accent = card.accent;
-            s.active_bg = card.bg;
-            s.active_alt = card.alt;
+            s.active_slot = Some(picked.slot_index);
+            s.active_accent = picked.accent;
+            s.active_bg = picked.bg;
+            s.active_alt = picked.alt;
             s.drag_velocity = 0.0;
-            clear_queue_bit(&mut s.queued_mask, slot);
+            clear_queue_bit(&mut s.queued_mask, picked.slot_index);
             if s.zoom < ZOOM_AUTO_THRESHOLD {
-                s.angle_target = Some(go_to_card_angle(card.theta));
-                s.zoom_target = Some(1.0);
+                s.angle_target = Some(snap_angle_for_picked(s.angle, &prepared, &picked));
+                s.zoom_target = None;
+                s.zoom_pending_after_snap = true;
             }
         }
         if state.lock().unwrap().audio_enabled {
@@ -453,9 +452,10 @@ impl JukeScenePanTarget {
         };
         let cam = pick_camera(&state);
         let active = state.lock().unwrap().active_slot;
-        let Some(slot) = pick_card_at_point(&prepared, cam, px, py, vw, vh) else {
+        let Some(picked) = pick_card_at_point(&prepared, cam, px, py, vw, vh) else {
             return false;
         };
+        let slot = picked.slot_index;
         if active == Some(slot) {
             return false;
         }
@@ -500,6 +500,10 @@ impl SceneHost {
                 if diff.abs() < 0.003 {
                     s.angle = target;
                     s.angle_target = None;
+                    if s.zoom_pending_after_snap {
+                        s.zoom_target = Some(1.0);
+                        s.zoom_pending_after_snap = false;
+                    }
                 } else {
                     s.angle += diff * 0.12;
                 }
@@ -575,8 +579,12 @@ fn make_initial_state(
         .unwrap_or(1);
     let words = queue_words_for_slots(total_slots);
     let init_angle = prepared
-        .and_then(|p| p.cards.iter().find(|c| !c.empty))
-        .map(|c| PI - c.theta)
+        .and_then(|p| {
+            p.cards
+                .iter()
+                .find(|c| !c.empty)
+                .map(|c| -grid_slot_theta(c.c, c.r, p.layout.cols, p.layout.rows))
+        })
         .unwrap_or(0.0);
     SceneState {
         angle: init_angle,
@@ -592,6 +600,7 @@ fn make_initial_state(
         active_slot: None,
         angle_target: None,
         zoom_target: None,
+        zoom_pending_after_snap: false,
         queued_mask: vec![0; words],
         total_slots,
         touch_active: false,
@@ -656,6 +665,7 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
             }
             s.spin = spin;
             if let Some(p) = props {
+                s.lighting = f32_prop(props, "lighting", s.lighting);
                 s.zoom_tight = f32_prop(props, "zoomTight", s.zoom_tight);
                 s.zoom_flat = f32_prop(props, "zoomFlat", s.zoom_flat);
                 s.show_categories = bool_prop(props, "showCategories", s.show_categories);
@@ -818,6 +828,7 @@ pub fn reset_scene_camera() {
             if let Ok(mut s) = host.state.lock() {
                 s.zoom = 0.0;
                 s.zoom_target = None;
+                s.zoom_pending_after_snap = false;
                 s.active_slot = None;
                 s.angle_target = None;
             }

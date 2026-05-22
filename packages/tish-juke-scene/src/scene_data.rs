@@ -14,6 +14,10 @@ const CARD_RADIAL_OFFSET: f32 = 0.12;
 const QUEUE_WORDS: usize = 16;
 
 /// Grid slot pose — must match [`layout.tish`](../../juke-scene/src/layout.tish).
+pub(crate) fn grid_slot_theta(c: u32, r: u32, cols: u32, rows: u32) -> f32 {
+    slot_position(c, r, cols, rows).3
+}
+
 fn slot_position(c: u32, r: u32, cols: u32, rows: u32) -> (f32, f32, f32, f32) {
     use std::f32::consts::PI;
     let cols_f = cols.max(1) as f32;

@@ -83,7 +83,6 @@ fn App() {
 
   let modeRef = useRef(defaultMode({ spin: 0.35, lighting: 0.5 }))
   let lastStatus = useRef("")
-
   let prepareKey = builder === null ? -1 : builder.slotIndex
 
   useEffect(() => {
@@ -92,6 +91,8 @@ fn App() {
 
   useEffect(() => {
     if (!fontsReady) { return }
+    setScene(null)
+    resetSceneCamera()
     setBuilder(createSceneBuilder(generateDebugTracks(DEBUG_TRACKS), rows, SCENE_SEED))
   }, [fontsReady, rows])
 
@@ -110,7 +111,7 @@ fn App() {
       setBuilder(stepSceneBuilder(b, PREPARE_BATCH))
     }, 0)
     return () => clearTimeout(timer)
-  }, [prepareKey])
+  }, [prepareKey, rows])
 
   useEffect(() => {
     let timer = setInterval(() => {
@@ -130,9 +131,6 @@ fn App() {
 
   fn onChangeRows(n) {
     setRows(clampRows(n))
-    setScene(null)
-    setBuilder(null)
-    resetSceneCamera()
     bumpSettings()
   }
 
@@ -172,11 +170,14 @@ fn App() {
       <SceneView
         height={SCENE_HEIGHT}
         scene={scene}
+        rows={rows}
         spin={m.spin}
+        lighting={m.lighting}
         zoomTight={m.zoomTight}
         zoomFlat={m.zoomFlat}
         showCategories={m.showCategories}
         audioEnabled={m.audioEnabled}
+        settingsTick={settingsTick}
       />
       <row>
         <button onClick={() => setShowSettings(!showSettings)}>{showSettings ? "Hide" : "Settings"}</button>

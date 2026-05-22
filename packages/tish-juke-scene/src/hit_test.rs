@@ -1,8 +1,10 @@
 //! Screen-space card picking (matches Metal vertex projection).
 
+use std::f32::consts::PI;
+
 use crate::camera::CameraParams;
 use crate::renderer::{slot_card_width, CARD_H, CARD_SURFACE_PUSH};
-use crate::scene_data::{CardInstance, PreparedScene};
+use crate::scene_data::{grid_slot_theta, CardInstance, PreparedScene};
 
 fn rotate_y(p: [f32; 3], angle: f32) -> [f32; 3] {
     let c = angle.cos();
@@ -100,11 +102,40 @@ fn card_faces_camera(card: &CardInstance, angle: f32) -> bool {
     normal[2] > 0.08
 }
 
+fn shortest_angle_diff(from: f32, to: f32) -> f32 {
+    let mut diff = to - from;
+    while diff > PI {
+        diff -= 2.0 * PI;
+    }
+    while diff < -PI {
+        diff += 2.0 * PI;
+    }
+    diff
+}
+
 pub struct PickCamera {
     pub angle: f32,
     pub zoom: f32,
     pub zoom_tight: f32,
     pub zoom_flat: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PickedCard {
+    pub slot_index: usize,
+    pub c: u32,
+    pub r: u32,
+    pub accent: [f32; 3],
+    pub bg: [f32; 3],
+    pub alt: [f32; 3],
+}
+
+/// Drum rotation target that brings `card_theta` to face the fixed camera.
+/// Mirrors web `groupRotTarget = curAz - card.theta`; Metal camera azimuth is fixed at 0.
+pub fn snap_target_angle(current: f32, card_theta: f32) -> f32 {
+    let cur_az = 0.0;
+    let target = cur_az - card_theta;
+    current + shortest_angle_diff(current, target)
 }
 
 /// Pick the front-most track card under a UIKit tap point (top-left origin, pixels).
@@ -115,7 +146,7 @@ pub fn pick_card_at_point(
     tap_y: f32,
     view_w: f32,
     view_h: f32,
-) -> Option<usize> {
+) -> Option<PickedCard> {
     if view_w < 1.0 || view_h < 1.0 {
         return None;
     }
@@ -140,7 +171,7 @@ pub fn pick_card_at_point(
         [-hw, hh, 0.0],
     ];
 
-    let mut best: Option<(usize, f32, f32)> = None;
+    let mut best: Option<(PickedCard, f32, f32)> = None;
     for card in &scene.cards {
         if card.empty || !card_faces_camera(card, cam.angle) {
             continue;
@@ -164,17 +195,30 @@ pub fn pick_card_at_point(
         let cy = (quad[0].1 + quad[1].1 + quad[2].1 + quad[3].1) * 0.25;
         let dist_sq = (cx - tap_x) * (cx - tap_x) + (cy - tap_y) * (cy - tap_y);
         let dominated = best
+            .as_ref()
             .map(|(_, bd, bd_dist)| {
-                depth > bd + 1e-4 || (depth - bd).abs() <= 1e-4 && dist_sq >= bd_dist
+                depth > *bd + 1e-4 || (depth - *bd).abs() <= 1e-4 && dist_sq >= *bd_dist
             })
             .unwrap_or(false);
         if !dominated {
-            best = Some((card.slot_index, depth, dist_sq));
+            best = Some((
+                PickedCard {
+                    slot_index: card.slot_index,
+                    c: card.c,
+                    r: card.r,
+                    accent: card.accent,
+                    bg: card.bg,
+                    alt: card.alt,
+                },
+                depth,
+                dist_sq,
+            ));
         }
     }
-    best.map(|(i, _, _)| i)
+    best.map(|(picked, _, _)| picked)
 }
 
-pub fn go_to_card_angle(theta: f32) -> f32 {
-    std::f32::consts::PI - theta
+pub fn snap_angle_for_picked(current: f32, scene: &PreparedScene, picked: &PickedCard) -> f32 {
+    let theta = grid_slot_theta(picked.c, picked.r, scene.layout.cols, scene.layout.rows);
+    snap_target_angle(current, theta)
 }
