@@ -4,6 +4,8 @@ import {
   computeLayout as computeLayoutImpl,
   trackToCardSong as trackToCardSongImpl,
   makeSceneFromTracks as makeSceneFromTracksImpl,
+  MIN_ROWS as MIN_ROWS_VAL,
+  MAX_ROWS as MAX_ROWS_VAL,
 } from "./scene.tish"
 
 import {
@@ -21,10 +23,24 @@ import {
   DEFAULT_ROWS as DEFAULT_ROWS_VAL,
   SPIN_MAX as SPIN_MAX_VAL,
   SPIN_STEP as SPIN_STEP_VAL,
+  ZOOM_TIGHT_MIN as ZOOM_TIGHT_MIN_VAL,
+  ZOOM_TIGHT_MAX as ZOOM_TIGHT_MAX_VAL,
+  ZOOM_FLAT_STEP as ZOOM_FLAT_STEP_VAL,
+  ZOOM_TIGHT_DEFAULT as ZOOM_TIGHT_DEFAULT_VAL,
   clampSpin as clampSpinImpl,
   clampUnit as clampUnitImpl,
+  clampZoomTight as clampZoomTightImpl,
+  clampZoomFlat as clampZoomFlatImpl,
   defaultMode as defaultModeImpl,
 } from "./mode.tish"
+
+import {
+  CATEGORY_LABELS as CATEGORY_LABELS_VAL,
+  CAT_W as CAT_W_VAL,
+  CAT_H as CAT_H_VAL,
+  categoryCount as categoryCountImpl,
+  generateCategoryAtlas as generateCategoryAtlasImpl,
+} from "./categories.tish"
 
 import {
   createSceneBuilder as createSceneBuilderImpl,
@@ -73,8 +89,24 @@ export fn clampUnit(n) {
   return clampUnitImpl(n)
 }
 
+export fn clampZoomTight(n) {
+  return clampZoomTightImpl(n)
+}
+
+export fn clampZoomFlat(n) {
+  return clampZoomFlatImpl(n)
+}
+
 export fn defaultMode(opts) {
   return defaultModeImpl(opts)
+}
+
+export fn categoryCount() {
+  return categoryCountImpl()
+}
+
+export fn generateCategoryAtlas(cols) {
+  return generateCategoryAtlasImpl(cols)
 }
 
 export fn createSceneBuilder(tracks, rows, seed) {
@@ -98,5 +130,14 @@ export const CARD_GAP = CARD_GAP_VAL
 export const ROW_SPACING = ROW_SPACING_VAL
 export const CARD_RADIAL_OFFSET = CARD_RADIAL_OFFSET_VAL
 export const DEFAULT_ROWS = DEFAULT_ROWS_VAL
+export const MIN_ROWS = MIN_ROWS_VAL
+export const MAX_ROWS = MAX_ROWS_VAL
 export const SPIN_MAX = SPIN_MAX_VAL
 export const SPIN_STEP = SPIN_STEP_VAL
+export const ZOOM_TIGHT_MIN = ZOOM_TIGHT_MIN_VAL
+export const ZOOM_TIGHT_MAX = ZOOM_TIGHT_MAX_VAL
+export const ZOOM_FLAT_STEP = ZOOM_FLAT_STEP_VAL
+export const ZOOM_TIGHT_DEFAULT = ZOOM_TIGHT_DEFAULT_VAL
+export const CATEGORY_LABELS = CATEGORY_LABELS_VAL
+export const CAT_W = CAT_W_VAL
+export const CAT_H = CAT_H_VAL

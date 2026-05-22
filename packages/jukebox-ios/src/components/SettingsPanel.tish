@@ -1,0 +1,97 @@
+const MIN_ROWS = 4
+const MAX_ROWS = 20
+
+import { setLighting } from "tish:juke-scene"
+
+fn clampSpinLocal(n) {
+  if (n !== n) { return 0 }
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
+fn clampUnitLocal(n) {
+  if (n !== n) { return 0 }
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
+fn clampRowsLocal(n) {
+  if (n !== n) { return MIN_ROWS }
+  let v = Math.floor(n)
+  if (v < MIN_ROWS) { return MIN_ROWS }
+  if (v > MAX_ROWS) { return MAX_ROWS }
+  return v
+}
+
+fn clampZoomTightLocal(n) {
+  if (n !== n) { return 0.95 }
+  if (n < 0.5) { return 0.5 }
+  if (n > 1.5) { return 1.5 }
+  return n
+}
+
+fn clampZoomFlatLocal(n) {
+  if (n !== n) { return 0 }
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
+fn applyLighting(modeRef, v, onPanelChange) {
+  modeRef.current.lighting = clampUnitLocal(v)
+  setLighting(modeRef.current.lighting)
+  if (onPanelChange !== null) { onPanelChange() }
+}
+
+export fn SettingsPanel({ open, modeRef, rows, onChangeRows, onClose, onPanelChange }) {
+  if (!open) { return null }
+
+  let m = modeRef.current
+  let spin = clampSpinLocal(m.spin)
+  let lighting = clampUnitLocal(m.lighting)
+  let showCategories = m.showCategories !== false
+  let zoomTight = clampZoomTightLocal(m.zoomTight)
+  let zoomFlat = clampZoomFlatLocal(m.zoomFlat)
+  let audioEnabled = m.audioEnabled !== false
+
+  return (
+    <div paddingTop={12} paddingLeft={4} paddingRight={4}>
+      <p>{"Settings"}</p>
+      <p>{"Spin: " + spin + " / 1"}</p>
+      <row>
+        <button onClick={() => { m.spin = 0; if (onPanelChange !== null) { onPanelChange() } }}>Off</button>
+        <button onClick={() => { m.spin = clampSpinLocal(spin - 0.05); if (onPanelChange !== null) { onPanelChange() } }}>−</button>
+        <button onClick={() => { m.spin = clampSpinLocal(spin + 0.05); if (onPanelChange !== null) { onPanelChange() } }}>+</button>
+      </row>
+      <p>{"Rows: " + rows + " (" + MIN_ROWS + "–" + MAX_ROWS + ")"}</p>
+      <row>
+        <button onClick={() => { onChangeRows(clampRowsLocal(rows - 1)); if (onPanelChange !== null) { onPanelChange() } }}>−</button>
+        <button onClick={() => { onChangeRows(clampRowsLocal(rows + 1)); if (onPanelChange !== null) { onPanelChange() } }}>+</button>
+      </row>
+      <p>{"Lighting: " + lighting.toFixed(2)}</p>
+      <row>
+        <button onClick={() => applyLighting(modeRef, lighting - 0.05, onPanelChange)}>Diner</button>
+        <button onClick={() => applyLighting(modeRef, lighting + 0.05, onPanelChange)}>Rink</button>
+      </row>
+      <p>{"Zoom tight: " + zoomTight.toFixed(2)}</p>
+      <row>
+        <button onClick={() => { m.zoomTight = clampZoomTightLocal(zoomTight - 0.05); if (onPanelChange !== null) { onPanelChange() } }}>−</button>
+        <button onClick={() => { m.zoomTight = clampZoomTightLocal(zoomTight + 0.05); if (onPanelChange !== null) { onPanelChange() } }}>+</button>
+      </row>
+      <p>{"Zoom flat: " + zoomFlat.toFixed(2)}</p>
+      <button onClick={() => {
+        let n = zoomFlat + 0.25
+        if (n > 1.0001) { n = 0 }
+        m.zoomFlat = clampZoomFlatLocal(n)
+        if (onPanelChange !== null) { onPanelChange() }
+      }}>Cycle flat</button>
+      <p>{showCategories ? "Categories: on" : "Categories: off"}</p>
+      <button onClick={() => { m.showCategories = !showCategories; if (onPanelChange !== null) { onPanelChange() } }}>Toggle categories</button>
+      <p>{audioEnabled ? "Audio: on" : "Audio: off"}</p>
+      <button onClick={() => { m.audioEnabled = !audioEnabled; if (onPanelChange !== null) { onPanelChange() } }}>Toggle audio</button>
+      <button onClick={() => onClose()}>Close</button>
+    </div>
+  )
+}

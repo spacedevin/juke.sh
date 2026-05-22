@@ -1,11 +1,8 @@
 //! Screen-space card picking (matches Metal vertex projection).
 
-use std::f32::consts::PI;
-
-use crate::renderer::{camera_distance, slot_card_width, CARD_H, CARD_SURFACE_PUSH};
+use crate::camera::CameraParams;
+use crate::renderer::{slot_card_width, CARD_H, CARD_SURFACE_PUSH};
 use crate::scene_data::{CardInstance, PreparedScene};
-
-const PROJ_F: f32 = 1.0 / 0.41421356237;
 
 fn rotate_y(p: [f32; 3], angle: f32) -> [f32; 3] {
     let c = angle.cos();
@@ -36,6 +33,7 @@ fn project_point(
     world: [f32; 3],
     angle: f32,
     cam_dist: f32,
+    proj_f: f32,
     aspect: f32,
     view_w: f32,
     view_h: f32,
@@ -47,8 +45,8 @@ fn project_point(
     }
     let eye_x = rot[0];
     let eye_y = rot[1] + 0.15;
-    let ndc_x = eye_x * PROJ_F / aspect / (-eye_z);
-    let ndc_y = eye_y * PROJ_F / (-eye_z);
+    let ndc_x = eye_x * proj_f / aspect / (-eye_z);
+    let ndc_y = eye_y * proj_f / (-eye_z);
     if ndc_x.abs() > 1.5 || ndc_y.abs() > 1.5 {
         return None;
     }
@@ -79,6 +77,7 @@ fn project_card_quad(
     corners: &[[f32; 3]; 4],
     angle: f32,
     cam_dist: f32,
+    proj_f: f32,
     aspect: f32,
     view_w: f32,
     view_h: f32,
@@ -87,7 +86,7 @@ fn project_card_quad(
     let mut depth = f32::INFINITY;
     for (i, local) in corners.iter().enumerate() {
         let world = transform_corner(*local, card);
-        let (sx, sy, d) = project_point(world, angle, cam_dist, aspect, view_w, view_h)?;
+        let (sx, sy, d) = project_point(world, angle, cam_dist, proj_f, aspect, view_w, view_h)?;
         screen[i] = (sx, sy);
         depth = depth.min(d);
     }
@@ -95,18 +94,23 @@ fn project_card_quad(
 }
 
 fn card_faces_camera(card: &CardInstance, angle: f32) -> bool {
-    // Outward horizontal normal at the slot; after scene rotation it must point toward +Z camera.
     let nx = card.theta.sin();
     let nz = card.theta.cos();
     let normal = rotate_y([nx, 0.0, nz], angle);
     normal[2] > 0.08
 }
 
-/// Pick the front-most card under a UIKit tap point (top-left origin, points).
+pub struct PickCamera {
+    pub angle: f32,
+    pub zoom: f32,
+    pub zoom_tight: f32,
+    pub zoom_flat: f32,
+}
+
+/// Pick the front-most track card under a UIKit tap point (top-left origin, pixels).
 pub fn pick_card_at_point(
     scene: &PreparedScene,
-    angle: f32,
-    zoom: f32,
+    cam: PickCamera,
     tap_x: f32,
     tap_y: f32,
     view_w: f32,
@@ -115,10 +119,18 @@ pub fn pick_card_at_point(
     if view_w < 1.0 || view_h < 1.0 {
         return None;
     }
-    let card_w = slot_card_width(scene.layout.cols, scene.layout.radius);
-    let base_cam = camera_distance(scene.layout.radius);
-    let cam_dist = base_cam * (1.0 - zoom * 0.55).max(0.4);
     let aspect = view_w / view_h.max(1.0);
+    let params = CameraParams {
+        zoom: cam.zoom,
+        zoom_tight: cam.zoom_tight,
+        zoom_flat: cam.zoom_flat,
+        aspect,
+        height_total: scene.layout.height_total,
+        radius: scene.layout.radius,
+    };
+    let cam_dist = params.cam_dist();
+    let proj_f = params.proj_f();
+    let card_w = slot_card_width(scene.layout.cols, scene.layout.radius);
     let hw = card_w * 0.5;
     let hh = CARD_H * 0.5;
     let corners = [
@@ -130,12 +142,19 @@ pub fn pick_card_at_point(
 
     let mut best: Option<(usize, f32, f32)> = None;
     for card in &scene.cards {
-        if !card_faces_camera(card, angle) {
+        if card.empty || !card_faces_camera(card, cam.angle) {
             continue;
         }
-        let Some((quad, depth)) =
-            project_card_quad(card, &corners, angle, cam_dist, aspect, view_w, view_h)
-        else {
+        let Some((quad, depth)) = project_card_quad(
+            card,
+            &corners,
+            cam.angle,
+            cam_dist,
+            proj_f,
+            aspect,
+            view_w,
+            view_h,
+        ) else {
             continue;
         };
         if !point_in_quad(tap_x, tap_y, &quad) {
@@ -145,15 +164,17 @@ pub fn pick_card_at_point(
         let cy = (quad[0].1 + quad[1].1 + quad[2].1 + quad[3].1) * 0.25;
         let dist_sq = (cx - tap_x) * (cx - tap_x) + (cy - tap_y) * (cy - tap_y);
         let dominated = best
-            .map(|(_, bd, bd_dist)| depth > bd + 1e-4 || (depth - bd).abs() <= 1e-4 && dist_sq >= bd_dist)
+            .map(|(_, bd, bd_dist)| {
+                depth > bd + 1e-4 || (depth - bd).abs() <= 1e-4 && dist_sq >= bd_dist
+            })
             .unwrap_or(false);
         if !dominated {
-            best = Some((card.index, depth, dist_sq));
+            best = Some((card.slot_index, depth, dist_sq));
         }
     }
     best.map(|(i, _, _)| i)
 }
 
 pub fn go_to_card_angle(theta: f32) -> f32 {
-    PI - theta
+    std::f32::consts::PI - theta
 }

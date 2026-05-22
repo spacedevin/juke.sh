@@ -3,6 +3,10 @@
 export const DEFAULT_ROWS = 10
 export const SPIN_MAX = 10
 export const SPIN_STEP = 0.25
+export const ZOOM_TIGHT_MIN = 0.4
+export const ZOOM_TIGHT_MAX = 1.2
+export const ZOOM_FLAT_STEP = 0.2
+export const ZOOM_TIGHT_DEFAULT = 0.95
 
 export fn clampSpin(n) {
   if (n !== n) { return 0 }
@@ -17,13 +21,41 @@ export fn clampUnit(n) {
   return n
 }
 
+export fn clampZoomTight(n) {
+  if (n !== n) { return ZOOM_TIGHT_DEFAULT }
+  if (n < ZOOM_TIGHT_MIN) { return ZOOM_TIGHT_MIN }
+  if (n > ZOOM_TIGHT_MAX) { return ZOOM_TIGHT_MAX }
+  return n
+}
+
+export fn clampZoomFlat(n) {
+  if (n !== n) { return 0 }
+  if (n < 0) { return 0 }
+  if (n > 1) { return 1 }
+  return n
+}
+
 export fn defaultMode(opts) {
   if (opts === null) { opts = {} }
   let spin = 0
   if (opts.spin !== null) { spin = opts.spin }
+  let lighting = 0.5
+  if (opts.lighting !== null) { lighting = opts.lighting }
+  let zoomTight = ZOOM_TIGHT_DEFAULT
+  if (opts.zoomTight !== null) { zoomTight = opts.zoomTight }
+  let zoomFlat = 0
+  if (opts.zoomFlat !== null) { zoomFlat = opts.zoomFlat }
+  let showCategories = true
+  if (opts.showCategories === false) { showCategories = false }
+  let audioEnabled = true
+  if (opts.audioEnabled === false) { audioEnabled = false }
   return {
     spin: clampSpin(spin),
     zoom: 0,
-    lighting: clampUnit(opts.lighting !== null ? opts.lighting : 0.5),
+    lighting: clampUnit(lighting),
+    zoomTight: clampZoomTight(zoomTight),
+    zoomFlat: clampZoomFlat(zoomFlat),
+    showCategories: showCategories,
+    audioEnabled: audioEnabled,
   }
 }

@@ -1,0 +1,43 @@
+// Bottom-rim category labels — shared with web three-scene.js.
+
+export const CAT_W = 256
+export const CAT_H = 64
+
+export const CATEGORY_LABELS = [
+  "extended play",
+  "varieties",
+  "your picks",
+  "favorites",
+  "soul",
+  "popular",
+  "hit tunes",
+  "jazz",
+  "country",
+  "rock & roll",
+]
+
+export fn categoryCount() {
+  return CATEGORY_LABELS.length
+}
+
+export fn generateCategoryAtlas(cols) {
+  if (cols === null) { cols = 8 }
+  let catN = CATEGORY_LABELS.length
+  let canvas = document.createElement("canvas")
+  canvas.width = CAT_W
+  canvas.height = CAT_H * catN
+  let ctx = canvas.getContext("2d")
+  ctx.fillStyle = "#006666"
+  ctx.fillRect(0, 0, CAT_W, CAT_H * catN)
+  ctx.fillStyle = "#ffffff"
+  ctx.font = "bold 28px 'Oswald'"
+  ctx.textAlign = "center"
+  ctx.textBaseline = "middle"
+  let i = 0
+  while (i < catN) {
+    let label = CATEGORY_LABELS[i].toUpperCase()
+    ctx.fillText(label, CAT_W / 2, i * CAT_H + CAT_H / 2)
+    i = i + 1
+  }
+  return { canvas: canvas, categoryCount: catN, cols: cols }
+}

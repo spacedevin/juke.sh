@@ -1,34 +1,99 @@
-// Native jukebox iOS — card art + Metal drum scene.
-//
-// Build: `just run-jukebox-ios-sim` from jukebox repo root.
+// Native jukebox iOS — full scene port (Tish-first).
 
-import { ios, useState, useEffect } from "tish:ios"
-import { setTimeout, clearTimeout } from "tish:timers"
-import { isLoggedIn } from "tish:spotify-ios"
-import { version as sceneVersion } from "tish:juke-scene"
+import { ios, useState, useEffect, useRef } from "tish:ios"
+import { setTimeout, clearTimeout, setInterval, clearInterval } from "tish:timers"
+import {
+  version as sceneVersion,
+  getActiveIndex,
+  getQueuedCount,
+  getLighting,
+  resetSceneCamera,
+  debugSceneParse,
+} from "tish:juke-scene"
 import {
   generateDebugTracks,
   DEFAULT_ROWS,
-  SPIN_MAX,
   SPIN_STEP,
   createSceneBuilder,
   stepSceneBuilder,
   sceneFromBuilder,
   builderProgress,
+  defaultMode,
+  clampRows,
+  clampSpin,
 } from "@spacedevin/juke-scene"
+import { preloadCardFonts } from "@spacedevin/juke-cards"
+import { SettingsPanel } from "./components/SettingsPanel.tish"
 
 const SCENE_SEED = 42
 const PREPARE_BATCH = 6
-const DEBUG_TRACKS = 60
-let debugTracks = generateDebugTracks(DEBUG_TRACKS)
+const DEBUG_TRACKS = 120
+const POLL_MS = 1000
+const SCENE_HEIGHT = 520
+
+async fn loadCardFonts(setFontsReady) {
+  try { await preloadCardFonts() } catch (e) { }
+  setFontsReady(true)
+}
+
+fn formatStatusLine(scene) {
+  let activeIdx = getActiveIndex()
+  let queuedCount = getQueuedCount()
+  let lightingVal = getLighting()
+  let parseText = scene !== null ? debugSceneParse(scene) : "no scene"
+  return (
+    "Active: " + (activeIdx >= 0 ? activeIdx : "—")
+    + " · Queued: " + queuedCount
+    + " · Light: " + lightingVal.toFixed(2)
+    + " · " + parseText
+  )
+}
+
+fn pollSceneState(scene, hasActive, lastStatus, setHasActive, setStatusLine, modeRef) {
+  let activeIdx = getActiveIndex()
+  let nextHasActive = activeIdx >= 0
+  modeRef.current.lighting = getLighting()
+  let line = formatStatusLine(scene)
+  if (line !== lastStatus.current) {
+    lastStatus.current = line
+    setStatusLine(line)
+  }
+  if (nextHasActive !== hasActive) {
+    setHasActive(nextHasActive)
+  }
+}
+
+fn spinDownRef(modeRef) {
+  modeRef.current.spin = clampSpin(modeRef.current.spin - SPIN_STEP)
+}
+
+fn spinUpRef(modeRef) {
+  modeRef.current.spin = clampSpin(modeRef.current.spin + SPIN_STEP)
+}
 
 fn App() {
   let [scene, setScene] = useState(null)
   let [builder, setBuilder] = useState(null)
-  let [spin, setSpin] = useState(0.35)
-  let loggedIn = isLoggedIn()
+  let [rows, setRows] = useState(DEFAULT_ROWS)
+  let [showSettings, setShowSettings] = useState(false)
+  let [settingsTick, setSettingsTick] = useState(0)
+  let [hasActive, setHasActive] = useState(false)
+  let [statusLine, setStatusLine] = useState("Loading…")
+  let [fontsReady, setFontsReady] = useState(false)
+
+  let modeRef = useRef(defaultMode({ spin: 0.35, lighting: 0.5 }))
+  let lastStatus = useRef("")
 
   let prepareKey = builder === null ? -1 : builder.slotIndex
+
+  useEffect(() => {
+    loadCardFonts(setFontsReady)
+  }, [])
+
+  useEffect(() => {
+    if (!fontsReady) { return }
+    setBuilder(createSceneBuilder(generateDebugTracks(DEBUG_TRACKS), rows, SCENE_SEED))
+  }, [fontsReady, rows])
 
   useEffect(() => {
     if (builder === null) {
@@ -39,6 +104,7 @@ fn App() {
       if (b.slotIndex >= b.layout.slots.length) {
         setScene(sceneFromBuilder(b))
         setBuilder(null)
+        resetSceneCamera()
         return
       }
       setBuilder(stepSceneBuilder(b, PREPARE_BATCH))
@@ -46,58 +112,87 @@ fn App() {
     return () => clearTimeout(timer)
   }, [prepareKey])
 
-  fn loadScene() {
-    if (builder !== null) {
-      return
-    }
+  useEffect(() => {
+    let timer = setInterval(() => {
+      pollSceneState(scene, hasActive, lastStatus, setHasActive, setStatusLine, modeRef)
+    }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [scene, hasActive])
+
+  fn bumpSettings() {
+    setSettingsTick(settingsTick + 1)
+  }
+
+  fn onCloseSettings() {
+    setShowSettings(false)
+    bumpSettings()
+  }
+
+  fn onChangeRows(n) {
+    setRows(clampRows(n))
     setScene(null)
-    setTimeout(() => {
-      setBuilder(createSceneBuilder(debugTracks, DEFAULT_ROWS, SCENE_SEED))
-    }, 0)
+    setBuilder(null)
+    resetSceneCamera()
+    bumpSettings()
   }
 
   fn spinDown() {
-    let n = spin - SPIN_STEP
-    if (n < -SPIN_MAX) { n = -SPIN_MAX }
-    setSpin(n)
+    spinDownRef(modeRef)
+    bumpSettings()
   }
 
   fn spinUp() {
-    let n = spin + SPIN_STEP
-    if (n > SPIN_MAX) { n = SPIN_MAX }
-    setSpin(n)
+    spinUpRef(modeRef)
+    bumpSettings()
   }
 
   fn spinOff() {
-    setSpin(0)
+    modeRef.current.spin = 0
+    bumpSettings()
   }
 
-  let prepareProgress = builder !== null ? builderProgress(builder) : null
-  let sceneLabel = prepareProgress !== null
-    ? ("prep " + prepareProgress.cards + "/" + prepareProgress.tracks)
-    : (scene === null
-      ? "no scene"
-      : (scene.cols + "x" + scene.rows + " · " + scene.cells.length + " cards"))
-  let loadLabel = builder !== null ? "Preparing…" : (scene === null ? "Load scene" : "Reload")
+  fn zoomOut() {
+    resetSceneCamera()
+    bumpSettings()
+  }
 
-  let metaLine = "juke.sh · " + sceneVersion + " · " + sceneLabel
-    + " · Spin: " + spin
-    + " · Spotify: " + (loggedIn ? "in" : "out")
+  let m = modeRef.current
+  let prepareProgress = builder !== null ? builderProgress(builder) : null
 
   return (
-    <div paddingTop={52} paddingLeft={10} paddingRight={10} paddingBottom={12}>
-      <p>{metaLine}</p>
+    <div paddingTop={48} paddingLeft={8} paddingRight={8} paddingBottom={8}>
+      <p>{"juke.sh · " + sceneVersion}</p>
+      <p>{statusLine}</p>
+      {!hasActive && scene !== null && !showSettings
+        ? <p>{"TAP TO PLAY · HOLD TO QUEUE · DRAG SPIN/ZOOM · PINCH ZOOM · DOUBLE-TAP ZOOM"}</p>
+        : null}
+      {prepareProgress !== null
+        ? <p>{"Preparing " + prepareProgress.cards + " cards…"}</p>
+        : null}
       <SceneView
-        height={400}
+        height={SCENE_HEIGHT}
         scene={scene}
-        spin={spin}
+        spin={m.spin}
+        zoomTight={m.zoomTight}
+        zoomFlat={m.zoomFlat}
+        showCategories={m.showCategories}
+        audioEnabled={m.audioEnabled}
       />
       <row>
-        <button onClick={() => loadScene()}>{loadLabel}</button>
+        <button onClick={() => setShowSettings(!showSettings)}>{showSettings ? "Hide" : "Settings"}</button>
+        <button onClick={() => zoomOut()}>Zoom out</button>
         <button onClick={() => spinOff()}>Spin off</button>
         <button onClick={() => spinDown()}>Spin −</button>
         <button onClick={() => spinUp()}>Spin +</button>
       </row>
+      <SettingsPanel
+        open={showSettings}
+        modeRef={modeRef}
+        rows={rows}
+        onChangeRows={onChangeRows}
+        onClose={onCloseSettings}
+        onPanelChange={bumpSettings}
+      />
     </div>
   )
 }

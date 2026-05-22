@@ -2,10 +2,11 @@
 
 import { generateCardArt } from "@spacedevin/juke-cards"
 import { slotPosition, CARD_W, CARD_GAP, ROW_SPACING, CARD_RADIAL_OFFSET } from "./layout.tish"
+import { generateCategoryAtlas } from "./categories.tish"
 
 const PI = 3.141592653589793
-const MIN_ROWS = 4
-const MAX_ROWS = 20
+export const MIN_ROWS = 4
+export const MAX_ROWS = 20
 const MIN_EMPTY = 10
 const MIN_COLS = 8
 const DRUM_HEIGHT_PAD = 4
@@ -162,6 +163,37 @@ export fn computeLayout(tracks, rows, seed) {
   }
 }
 
+fn makeCellFromSlot(slot, art, song) {
+  if (slot.track === null) {
+    return {
+      slotIndex: slot.index,
+      c: slot.c,
+      r: slot.r,
+      x: slot.x,
+      y: slot.y,
+      z: slot.z,
+      theta: slot.theta,
+      empty: true,
+    }
+  }
+  return {
+    slotIndex: slot.index,
+    c: slot.c,
+    r: slot.r,
+    x: slot.x,
+    y: slot.y,
+    z: slot.z,
+    theta: slot.theta,
+    empty: false,
+    canvas: art.canvas,
+    uri: song.uri,
+    titleA: song.titleA,
+    accent: art.accent,
+    bg: art.bg,
+    alt: art.alt,
+  }
+}
+
 export fn makeSceneFromTracks(tracks, rows, seed) {
   let layout = computeLayout(tracks, rows, seed)
   let cells = []
@@ -171,25 +203,21 @@ export fn makeSceneFromTracks(tracks, rows, seed) {
     if (slot.track !== null) {
       let song = trackToCardSong(slot.track, slot.c, slot.r)
       let art = generateCardArt(song)
-      cells.push({
-        index: cells.length,
-        slotIndex: slot.index,
-        c: slot.c,
-        r: slot.r,
-        x: slot.x,
-        y: slot.y,
-        z: slot.z,
-        theta: slot.theta,
-        canvas: art.canvas,
-      })
+      cells.push(makeCellFromSlot(slot, art, song))
+    } else {
+      cells.push(makeCellFromSlot(slot, null, null))
     }
     i = i + 1
   }
+  let catAtlas = generateCategoryAtlas(layout.cols)
   return {
     cols: layout.cols,
     rows: layout.rows,
     radius: layout.radius,
     heightTotal: layout.heightTotal,
+    totalCells: layout.totalCells,
     cells: cells,
+    categoryAtlas: catAtlas.canvas,
+    categoryCount: catAtlas.categoryCount,
   }
 }

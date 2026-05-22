@@ -11,6 +11,7 @@ const CARD_W: f32 = 3.2;
 const CARD_GAP: f32 = 0.3;
 const ROW_SPACING: f32 = 1.4;
 const CARD_RADIAL_OFFSET: f32 = 0.12;
+const QUEUE_WORDS: usize = 16;
 
 /// Grid slot pose — must match [`layout.tish`](../../juke-scene/src/layout.tish).
 fn slot_position(c: u32, r: u32, cols: u32, rows: u32) -> (f32, f32, f32, f32) {
@@ -27,20 +28,43 @@ fn slot_position(c: u32, r: u32, cols: u32, rows: u32) -> (f32, f32, f32, f32) {
     (x, y, z, theta)
 }
 
+fn parse_hex_color(v: &Value) -> Option<[f32; 3]> {
+    let s = v.to_display_string();
+    let hex = s.trim().trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f32 / 255.0;
+    Some([r, g, b])
+}
+
+fn bool_field(m: &ObjectMap, key: &str) -> bool {
+    match m.get(key) {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => *n != 0.0,
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SceneLayout {
     pub radius: f32,
     pub height_total: f32,
     pub cols: u32,
     pub rows: u32,
+    pub total_slots: u32,
 }
 
 #[derive(Clone, Debug)]
 pub struct CardInstance {
-    pub index: usize,
+    /// Canonical grid slot index (`slotIndex` in Tish).
+    pub slot_index: usize,
     pub c: u32,
     pub r: u32,
     pub title: String,
+    pub empty: bool,
     pub x: f32,
     pub y: f32,
     pub z: f32,
@@ -49,6 +73,9 @@ pub struct CardInstance {
     pub v0: f32,
     pub u1: f32,
     pub v1: f32,
+    pub accent: [f32; 3],
+    pub bg: [f32; 3],
+    pub alt: [f32; 3],
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +84,10 @@ pub struct PreparedScene {
     pub atlas_width: u32,
     pub atlas_height: u32,
     pub atlas_rgba: Vec<u8>,
+    pub category_atlas_width: u32,
+    pub category_atlas_height: u32,
+    pub category_atlas_rgba: Vec<u8>,
+    pub category_count: u32,
     pub cards: Vec<CardInstance>,
 }
 
@@ -94,6 +125,19 @@ fn blit_rgba(
     }
 }
 
+fn parse_category_atlas(m: &ObjectMap) -> (u32, u32, Vec<u8>, u32) {
+    let count = num_field(m, "categoryCount")
+        .unwrap_or(10.0)
+        .max(1.0) as u32;
+    let Some(canvas) = m.get("categoryAtlas") else {
+        return (0, 0, Vec::new(), count);
+    };
+    let Some((w, h, rgba)) = canvas_rgba_bytes(canvas) else {
+        return (0, 0, Vec::new(), count);
+    };
+    (w, h, rgba, count)
+}
+
 /// Parse a Tish scene object into GPU-ready data without modifying `scene`.
 pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
     let Value::Object(obj) = scene else {
@@ -107,72 +151,99 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
     let height_total = num_field(m, "heightTotal")
         .or_else(|| num_field(m, "height_total"))
         .unwrap_or(2.1) as f32;
+    let total_slots = num_field(m, "totalCells")
+        .map(|n| n.max(1.0) as u32)
+        .unwrap_or(cols * rows);
 
     let Value::Array(cells_arr) = m.get("cells")? else {
         return None;
     };
     let cells = cells_arr.borrow();
-    if cells.is_empty() {
-        return None;
-    }
 
     let atlas_w = cols * CELL_W;
     let atlas_h = rows * CELL_H;
     let mut atlas = vec![0u8; (atlas_w * atlas_h * 4) as usize];
     let mut cards = Vec::new();
 
-    for (index, cell) in cells.iter().enumerate() {
+    for cell in cells.iter() {
         let Value::Object(cell_obj) = cell else {
             continue;
         };
         let cm = &cell_obj.borrow().strings;
-        let canvas = match cm.get("canvas") {
-            Some(c) => c,
-            None => continue,
-        };
-        let (src_w, src_h, rgba) = canvas_rgba_bytes(canvas)?;
-        let copy_w = src_w.min(CELL_W);
-        let copy_h = src_h.min(CELL_H);
-
         let c = num_field(cm, "c").unwrap_or(0.0).max(0.0) as u32;
         let r = num_field(cm, "r").unwrap_or(0.0).max(0.0) as u32;
         if c >= cols || r >= rows {
             continue;
         }
 
-        let ax = c * CELL_W;
-        let ay = r * CELL_H;
-        blit_rgba(
-            &mut atlas,
-            atlas_w,
-            ax,
-            ay,
-            copy_w,
-            copy_h,
-            src_w,
-            &rgba,
-        );
-
-        let u0 = ax as f32 / atlas_w as f32;
-        let v0 = ay as f32 / atlas_h as f32;
-        let u1 = (ax + copy_w) as f32 / atlas_w as f32;
-        let v1 = (ay + copy_h) as f32 / atlas_h as f32;
-
-        let (x, y, z, theta) = slot_position(c, r, cols, rows);
-        let cell_index = num_field(cm, "index")
+        let slot_index = num_field(cm, "slotIndex")
             .map(|n| n.max(0.0) as usize)
-            .unwrap_or(index);
+            .unwrap_or((r * cols + c) as usize);
+        let empty = bool_field(cm, "empty");
+        let (def_x, def_y, def_z, def_theta) = slot_position(c, r, cols, rows);
+        let x = num_field(cm, "x").map(|n| n as f32).unwrap_or(def_x);
+        let y = num_field(cm, "y").map(|n| n as f32).unwrap_or(def_y);
+        let z = num_field(cm, "z").map(|n| n as f32).unwrap_or(def_z);
+        let theta = num_field(cm, "theta").map(|n| n as f32).unwrap_or(def_theta);
         let title = cm
             .get("titleA")
             .or_else(|| cm.get("title"))
             .map(|v| v.to_display_string())
             .unwrap_or_default();
+        let accent = cm
+            .get("accent")
+            .and_then(parse_hex_color)
+            .unwrap_or([0.0, 0.95, 1.0]);
+        let bg = cm
+            .get("bg")
+            .and_then(parse_hex_color)
+            .unwrap_or([0.1, 0.1, 0.15]);
+        let alt = cm
+            .get("alt")
+            .and_then(parse_hex_color)
+            .unwrap_or([1.0, 0.5, 0.2]);
+
+        let mut render_empty = empty;
+        let (u0, v0, u1, v1) = if !empty {
+            match cm.get("canvas").and_then(|canvas| canvas_rgba_bytes(canvas)) {
+                Some((src_w, src_h, rgba)) => {
+                    let copy_w = src_w.min(CELL_W);
+                    let copy_h = src_h.min(CELL_H);
+                    let ax = c * CELL_W;
+                    let ay = r * CELL_H;
+                    blit_rgba(
+                        &mut atlas,
+                        atlas_w,
+                        ax,
+                        ay,
+                        copy_w,
+                        copy_h,
+                        src_w,
+                        &rgba,
+                    );
+                    (
+                        ax as f32 / atlas_w as f32,
+                        ay as f32 / atlas_h as f32,
+                        (ax + copy_w) as f32 / atlas_w as f32,
+                        (ay + copy_h) as f32 / atlas_h as f32,
+                    )
+                }
+                None => {
+                    eprintln!("[juke-scene] cell {slot_index} canvas unreadable");
+                    render_empty = true;
+                    (0.0, 0.0, 0.0, 0.0)
+                }
+            }
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
 
         cards.push(CardInstance {
-            index: cell_index,
+            slot_index,
             c,
             r,
             title,
+            empty: render_empty,
             x,
             y,
             z,
@@ -181,6 +252,9 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
             v0,
             u1,
             v1,
+            accent,
+            bg,
+            alt,
         });
     }
 
@@ -188,16 +262,23 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
         return None;
     }
 
+    let (cat_w, cat_h, cat_rgba, cat_count) = parse_category_atlas(m);
+
     Some(PreparedScene {
         layout: SceneLayout {
             radius,
             height_total,
             cols,
             rows,
+            total_slots,
         },
         atlas_width: atlas_w,
         atlas_height: atlas_h,
         atlas_rgba: atlas,
+        category_atlas_width: cat_w,
+        category_atlas_height: cat_h,
+        category_atlas_rgba: cat_rgba,
+        category_count: cat_count,
         cards,
     })
 }
@@ -209,11 +290,16 @@ pub fn scene_fingerprint(p: &PreparedScene) -> u64 {
     p.layout.rows.hash(&mut h);
     p.cards.len().hash(&mut h);
     for card in &p.cards {
-        card.index.hash(&mut h);
+        card.slot_index.hash(&mut h);
         card.c.hash(&mut h);
         card.r.hash(&mut h);
+        card.empty.hash(&mut h);
     }
     h.finish()
+}
+
+pub fn queue_words_for_slots(total: u32) -> usize {
+    ((total as usize + 31) / 32).min(QUEUE_WORDS)
 }
 
 pub fn debug_scene_parse(scene: &Value) -> String {
@@ -221,13 +307,26 @@ pub fn debug_scene_parse(scene: &Value) -> String {
         return "no scene".into();
     }
     match parse_scene(scene) {
-        Some(p) => format!(
-            "ok {} cards, {}x{} atlas ({} bytes)",
-            p.cards.len(),
-            p.atlas_width,
-            p.atlas_height,
-            p.atlas_rgba.len()
-        ),
+        Some(p) => {
+            let track_cards = p.cards.iter().filter(|c| !c.empty).count();
+            let empty_slots = p.cards.iter().filter(|c| c.empty).count();
+            let opaque_pixels = p
+                .atlas_rgba
+                .chunks(4)
+                .filter(|px| px.len() == 4 && px[3] > 8)
+                .count();
+            format!(
+                "ok {} slots ({} tracks, {} empty), {}x{} grid, {}x{} atlas, {} px",
+                p.cards.len(),
+                track_cards,
+                empty_slots,
+                p.layout.cols,
+                p.layout.rows,
+                p.atlas_width,
+                p.atlas_height,
+                opaque_pixels,
+            )
+        }
         None => "parse failed".into(),
     }
 }

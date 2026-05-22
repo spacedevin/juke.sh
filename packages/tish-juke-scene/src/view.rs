@@ -9,25 +9,24 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_core_foundation::{CGRect, CGPoint, CGSize};
-use objc2_foundation::{NSDefaultRunLoopMode, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSSet, NSString};
+use objc2_foundation::{NSDefaultRunLoopMode, NSObject, NSObjectProtocol, NSRunLoop, NSRunLoopCommonModes, NSSet};
 use objc2_metal::MTLCreateSystemDefaultDevice;
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CACurrentMediaTime, CADisplayLink, CAMetalLayer};
-use objc2_ui_kit::{
-    UIColor, UIEvent, UIFont, UILabel, UITouch, UIView, UIViewAutoresizing,
-};
+use objc2_ui_kit::{UIColor, UIEvent, UITouch, UIView, UIViewAutoresizing};
 
 use tish_apple_common::scene_host::register_scene_view_factory;
 use tishlang_core::ObjectMap;
 
-use crate::hit_test::{go_to_card_angle, pick_card_at_point};
-use crate::renderer::{DrumRenderer, SceneState};
-use crate::scene_data::{parse_scene, scene_fingerprint, PreparedScene};
+use crate::audio::{play_selection_sound, set_audio_enabled};
+use crate::hit_test::{go_to_card_angle, pick_card_at_point, PickCamera};
+use crate::renderer::{DrumRenderer, DragAxis, SceneState};
+use crate::scene_data::{parse_scene, queue_words_for_slots, scene_fingerprint, PreparedScene};
 
 const TAP_DRAG_THRESHOLD: f32 = 8.0;
 const ZOOM_AUTO_THRESHOLD: f32 = 0.5;
 const LONG_PRESS_SECONDS: f64 = 0.35;
-const STATUS_BAR_HEIGHT: f64 = 36.0;
+const DOUBLE_TAP_MS: f64 = 0.35;
 
 thread_local! {
     static CACHED_SCENE_VIEW: RefCell<Option<Retained<JukeSceneHostView>>> = RefCell::new(None);
@@ -44,9 +43,14 @@ fn shortest_angle_diff(from: f32, to: f32) -> f32 {
     diff
 }
 
-fn pick_angle_zoom(state: &Arc<Mutex<SceneState>>) -> (f32, f32) {
+fn pick_camera(state: &Arc<Mutex<SceneState>>) -> PickCamera {
     let s = state.lock().unwrap();
-    (s.angle, s.zoom)
+    PickCamera {
+        angle: s.angle,
+        zoom: s.zoom,
+        zoom_tight: s.zoom_tight,
+        zoom_flat: s.zoom_flat,
+    }
 }
 
 fn begin_touch(state: &Arc<Mutex<SceneState>>) {
@@ -56,6 +60,7 @@ fn begin_touch(state: &Arc<Mutex<SceneState>>) {
     s.angle_target = None;
     s.zoom_target = None;
     s.drag_velocity = 0.0;
+    s.drag_axis = DragAxis::None;
 }
 
 fn end_touch(state: &Arc<Mutex<SceneState>>) {
@@ -67,11 +72,49 @@ fn end_touch(state: &Arc<Mutex<SceneState>>) {
 fn pick_surface(view: &JukeSceneHostView, tap_x: f32, tap_y: f32) -> (f32, f32, f32, f32) {
     let scale = view.contentScaleFactor().max(1.0) as f32;
     let bounds = view.bounds();
-    let status_h = (STATUS_BAR_HEIGHT as f32).min(bounds.size.height as f32);
-    let metal_h = (bounds.size.height as f32 - status_h).max(1.0);
     let w = bounds.size.width as f32 * scale;
-    let h = metal_h * scale;
-    (tap_x * scale, (tap_y - status_h) * scale, w, h)
+    let h = bounds.size.height as f32 * scale;
+    (tap_x * scale, tap_y * scale, w.max(1.0), h.max(1.0))
+}
+
+fn bool_prop(props: Option<&ObjectMap>, key: &str, default: bool) -> bool {
+    props
+        .and_then(|p| p.get(key))
+        .map(|v| match v {
+            tishlang_core::Value::Bool(b) => *b,
+            tishlang_core::Value::Number(n) => *n != 0.0,
+            _ => default,
+        })
+        .unwrap_or(default)
+}
+
+fn f32_prop(props: Option<&ObjectMap>, key: &str, default: f32) -> f32 {
+    props
+        .and_then(|p| p.get(key))
+        .and_then(|v| v.as_number())
+        .map(|n| n as f32)
+        .unwrap_or(default)
+}
+
+fn toggle_queue_bit(mask: &mut Vec<u32>, slot: usize) {
+    let word = slot / 32;
+    let bit = slot % 32;
+    while mask.len() <= word {
+        mask.push(0);
+    }
+    mask[word] ^= 1u32 << bit;
+}
+
+fn queue_count(mask: &[u32]) -> u32 {
+    mask.iter().map(|w| w.count_ones()).sum()
+}
+
+fn clear_queue_bit(mask: &mut Vec<u32>, slot: usize) {
+    let word = slot / 32;
+    let bit = slot % 32;
+    if word < mask.len() {
+        mask[word] &= !(1u32 << bit);
+    }
 }
 
 pub struct PanIvars {
@@ -80,6 +123,9 @@ pub struct PanIvars {
     pub long_press_fired: RefCell<bool>,
     pub drag_occurred: RefCell<bool>,
     pub touch_start: RefCell<(f32, f32)>,
+    pub drag_axis: RefCell<DragAxis>,
+    pub last_tap_at: RefCell<f64>,
+    pub pinch_start_dist: RefCell<Option<f32>>,
     pub view: RefCell<Option<Retained<JukeSceneHostView>>>,
 }
 
@@ -94,83 +140,9 @@ struct SceneHost {
 
 pub struct HostIvars {
     pub metal_layer: Retained<CAMetalLayer>,
-    pub pick_label: Retained<UILabel>,
     host: RefCell<Option<SceneHost>>,
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
     pan_target: Retained<JukeScenePanTarget>,
-}
-
-fn truncate_title(title: &str, max_chars: usize) -> String {
-    let count = title.chars().count();
-    if count <= max_chars {
-        return title.to_string();
-    }
-    let mut out: String = title.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-fn status_line_for_host(host: &SceneHost) -> String {
-    let s = host.state.lock().unwrap();
-    let queued = s.queued_bits.count_ones();
-    let active = match s.active_index {
-        None => "—".to_string(),
-        Some(idx) => host
-            .prepared
-            .as_ref()
-            .and_then(|p| p.cards.iter().find(|c| c.index == idx))
-            .map(|card| {
-                let title = truncate_title(&card.title, 16);
-                format!("#{idx} · {},{} · {title}", card.c, card.r)
-            })
-            .unwrap_or_else(|| format!("#{idx}")),
-    };
-    format!("Active: {active} · Queued: {queued}")
-}
-
-fn sync_status_label(view: &JukeSceneHostView) {
-    let text = view
-        .ivars()
-        .host
-        .borrow()
-        .as_ref()
-        .map(status_line_for_host)
-        .unwrap_or_else(|| "Active: — · Queued: 0".to_string());
-    view.ivars()
-        .pick_label
-        .setText(Some(&NSString::from_str(&text)));
-}
-
-fn layout_scene_chrome(view: &JukeSceneHostView) {
-    let bounds = view.bounds();
-    let scale = view.contentScaleFactor().max(1.0);
-    let w = bounds.size.width;
-    let h = bounds.size.height;
-    let status_h = STATUS_BAR_HEIGHT.min(h);
-
-    view.ivars().pick_label.setFrame(CGRect::new(
-        CGPoint::new(0.0, 0.0),
-        CGSize {
-            width: w,
-            height: status_h,
-        },
-    ));
-
-    let metal_y = status_h;
-    let metal_h = (h - status_h).max(1.0);
-    let layer = &view.ivars().metal_layer;
-    layer.setFrame(CGRect::new(
-        CGPoint::new(0.0, metal_y),
-        CGSize {
-            width: w,
-            height: metal_h,
-        },
-    ));
-    layer.setContentsScale(scale);
-    layer.setDrawableSize(CGSize {
-        width: w * scale,
-        height: metal_h * scale,
-    });
 }
 
 define_class!(
@@ -188,16 +160,7 @@ define_class!(
             unsafe {
                 let _: () = msg_send![super(self), layoutSubviews];
             }
-            layout_scene_chrome(self);
-        }
-
-        #[unsafe(method(didMoveToWindow))]
-        fn did_move_to_window(&self) {
-            unsafe {
-                let _: () = msg_send![super(self), didMoveToWindow];
-            }
-            layout_scene_chrome(self);
-            sync_status_label(self);
+            layout_metal_layer(self);
         }
 
         #[unsafe(method(displayLinkTick:))]
@@ -211,7 +174,18 @@ define_class!(
         }
 
         #[unsafe(method(touchesBegan:withEvent:))]
-        fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+        fn touches_began(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            if let Some(ev) = event {
+                if let Some(all) = ev.allTouches() {
+                    if all.count() >= 2 {
+                        self.ivars().pan_target.on_pinch_began(&all);
+                        return;
+                    }
+                }
+            }
+            if touches.count() > 1 {
+                return;
+            }
             let Some((x, y)) = touch_point(touches, self) else {
                 return;
             };
@@ -219,7 +193,18 @@ define_class!(
         }
 
         #[unsafe(method(touchesMoved:withEvent:))]
-        fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+        fn touches_moved(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            if let Some(ev) = event {
+                if let Some(all) = ev.allTouches() {
+                    if all.count() >= 2 {
+                        self.ivars().pan_target.on_pinch_moved(&all);
+                        return;
+                    }
+                }
+            }
+            if touches.count() > 1 {
+                return;
+            }
             let Some((x, y)) = touch_point(touches, self) else {
                 return;
             };
@@ -227,7 +212,19 @@ define_class!(
         }
 
         #[unsafe(method(touchesEnded:withEvent:))]
-        fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
+        fn touches_ended(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
+            if let Some(ev) = event {
+                if let Some(all) = ev.allTouches() {
+                    if all.count() >= 2 {
+                        self.ivars().pan_target.on_pinch_ended();
+                        return;
+                    }
+                }
+            }
+            if touches.count() > 1 {
+                self.ivars().pan_target.on_touch_ended();
+                return;
+            }
             let Some((x, y)) = touch_point(touches, self) else {
                 self.ivars().pan_target.on_touch_ended();
                 return;
@@ -238,6 +235,7 @@ define_class!(
         #[unsafe(method(touchesCancelled:withEvent:))]
         fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&UIEvent>) {
             let _ = touches;
+            self.ivars().pan_target.on_pinch_ended();
             self.ivars().pan_target.on_touch_ended();
         }
     }
@@ -259,10 +257,67 @@ fn touch_point(touches: &NSSet<UITouch>, view: &JukeSceneHostView) -> Option<(f3
     Some((loc.x as f32, loc.y as f32))
 }
 
+fn touch_distance(touches: &NSSet<UITouch>, view: &JukeSceneHostView) -> Option<f32> {
+    if touches.count() < 2 {
+        return None;
+    }
+    let objs = touches.allObjects();
+    if objs.count() < 2 {
+        return None;
+    }
+    let t0 = objs.objectAtIndex(0);
+    let t1 = objs.objectAtIndex(1);
+    let l0 = t0.locationInView(Some(view));
+    let l1 = t1.locationInView(Some(view));
+    let dx = l0.x - l1.x;
+    let dy = l0.y - l1.y;
+    Some(((dx * dx + dy * dy) as f32).sqrt())
+}
+
 impl JukeScenePanTarget {
+    fn on_pinch_began(&self, touches: &NSSet<UITouch>) {
+        if let Some(view) = self.ivars().view.borrow().clone() {
+            if let Some(d) = touch_distance(touches, &view) {
+                *self.ivars().pinch_start_dist.borrow_mut() = Some(d);
+                end_touch(&self.ivars().state);
+            }
+        }
+    }
+
+    fn on_pinch_moved(&self, touches: &NSSet<UITouch>) {
+        let Some(view) = self.ivars().view.borrow().clone() else {
+            return;
+        };
+        let Some(cur) = touch_distance(touches, &view) else {
+            return;
+        };
+        let mut start_slot = self.ivars().pinch_start_dist.borrow_mut();
+        let Some(start) = *start_slot else {
+            *start_slot = Some(cur);
+            return;
+        };
+        if start < 1.0 {
+            *start_slot = Some(cur);
+            return;
+        }
+        let scale = cur / start;
+        if (scale - 1.0).abs() > 0.002 {
+            let state = self.ivars().state.clone();
+            let mut s = state.lock().unwrap();
+            s.zoom = (s.zoom + (scale - 1.0) * 0.35).clamp(0.0, 1.0);
+            s.zoom_target = None;
+            *start_slot = Some(cur);
+        }
+    }
+
+    fn on_pinch_ended(&self) {
+        *self.ivars().pinch_start_dist.borrow_mut() = None;
+    }
+
     fn on_touch_began(&self, x: f32, y: f32) {
         *self.ivars().long_press_fired.borrow_mut() = false;
         *self.ivars().drag_occurred.borrow_mut() = false;
+        *self.ivars().drag_axis.borrow_mut() = DragAxis::None;
         *self.ivars().touch_start.borrow_mut() = (x, y);
         begin_touch(&self.ivars().state);
     }
@@ -307,7 +362,21 @@ impl JukeScenePanTarget {
             if let Some(view) = self.ivars().view.borrow().clone() {
                 let (sx, sy) = *self.ivars().touch_start.borrow();
                 let (px, py, vw, vh) = pick_surface(&view, sx, sy);
-                let _ = self.try_select_at(px, py, vw, vh);
+                if self.try_select_at(px, py, vw, vh) {
+                    *self.ivars().last_tap_at.borrow_mut() = 0.0;
+                } else {
+                    let now = CACurrentMediaTime();
+                    let last = *self.ivars().last_tap_at.borrow();
+                    if now - last < DOUBLE_TAP_MS {
+                        *self.ivars().last_tap_at.borrow_mut() = 0.0;
+                        let state = self.ivars().state.clone();
+                        let mut s = state.lock().unwrap();
+                        s.zoom = if s.zoom > 0.5 { 0.0 } else { 1.0 };
+                        s.zoom_target = None;
+                    } else {
+                        *self.ivars().last_tap_at.borrow_mut() = now;
+                    }
+                }
             }
         }
         let _ = (x, y);
@@ -351,28 +420,28 @@ impl JukeScenePanTarget {
         let Some(prepared) = self.ivars().prepared.borrow().clone() else {
             return false;
         };
-        let (angle, zoom) = pick_angle_zoom(&state);
-        let Some(idx) = pick_card_at_point(&prepared, angle, zoom, px, py, vw, vh) else {
+        let cam = pick_camera(&state);
+        let Some(slot) = pick_card_at_point(&prepared, cam, px, py, vw, vh) else {
             return false;
         };
-        let Some(card) = prepared.cards.iter().find(|c| c.index == idx) else {
+        let Some(card) = prepared.cards.iter().find(|c| c.slot_index == slot) else {
             return false;
         };
         {
             let mut s = state.lock().unwrap();
-            s.active_index = Some(idx);
+            s.active_slot = Some(slot);
+            s.active_accent = card.accent;
+            s.active_bg = card.bg;
+            s.active_alt = card.alt;
             s.drag_velocity = 0.0;
-            if idx < 64 {
-                s.queued_bits &= !(1u64 << idx);
-            }
-            // Match web: only spin/zoom to center when zoomed out (browse mode).
+            clear_queue_bit(&mut s.queued_mask, slot);
             if s.zoom < ZOOM_AUTO_THRESHOLD {
                 s.angle_target = Some(go_to_card_angle(card.theta));
                 s.zoom_target = Some(1.0);
             }
         }
-        if let Some(view) = self.ivars().view.borrow().clone() {
-            sync_status_label(&view);
+        if state.lock().unwrap().audio_enabled {
+            play_selection_sound();
         }
         true
     }
@@ -382,21 +451,20 @@ impl JukeScenePanTarget {
         let Some(prepared) = self.ivars().prepared.borrow().clone() else {
             return false;
         };
-        let (angle, zoom) = pick_angle_zoom(&state);
-        let active = state.lock().unwrap().active_index;
-        let Some(idx) = pick_card_at_point(&prepared, angle, zoom, px, py, vw, vh) else {
+        let cam = pick_camera(&state);
+        let active = state.lock().unwrap().active_slot;
+        let Some(slot) = pick_card_at_point(&prepared, cam, px, py, vw, vh) else {
             return false;
         };
-        if active == Some(idx) {
+        if active == Some(slot) {
             return false;
         }
-        if idx < 64 {
+        {
             let mut s = state.lock().unwrap();
-            let bit = 1u64 << idx;
-            s.queued_bits ^= bit;
+            toggle_queue_bit(&mut s.queued_mask, slot);
         }
-        if let Some(view) = self.ivars().view.borrow().clone() {
-            sync_status_label(&view);
+        if state.lock().unwrap().audio_enabled {
+            play_selection_sound();
         }
         true
     }
@@ -478,14 +546,71 @@ impl SceneHost {
     }
 }
 
+fn layout_metal_layer(view: &JukeSceneHostView) {
+    let bounds = view.bounds();
+    let scale = view.contentScaleFactor().max(1.0);
+    let layer = &view.ivars().metal_layer;
+    layer.setFrame(CGRect::new(
+        CGPoint::new(0.0, 0.0),
+        CGSize {
+            width: bounds.size.width,
+            height: bounds.size.height,
+        },
+    ));
+    layer.setContentsScale(scale);
+    layer.setDrawableSize(CGSize {
+        width: bounds.size.width * scale,
+        height: bounds.size.height * scale,
+    });
+}
+
+fn make_initial_state(
+    prepared: Option<&PreparedScene>,
+    spin: f32,
+    props: Option<&ObjectMap>,
+) -> SceneState {
+    let cols = prepared.map(|p| p.layout.cols).unwrap_or(1);
+    let total_slots = prepared
+        .map(|p| p.layout.total_slots.max(p.cards.len() as u32))
+        .unwrap_or(1);
+    let words = queue_words_for_slots(total_slots);
+    let init_angle = prepared
+        .and_then(|p| p.cards.iter().find(|c| !c.empty))
+        .map(|c| PI - c.theta)
+        .unwrap_or(0.0);
+    SceneState {
+        angle: init_angle,
+        drag_velocity: 0.0,
+        spin,
+        cols,
+        zoom: 0.0,
+        lighting: f32_prop(props, "lighting", 0.5),
+        zoom_tight: f32_prop(props, "zoomTight", 0.95),
+        zoom_flat: f32_prop(props, "zoomFlat", 0.0),
+        show_categories: bool_prop(props, "showCategories", true),
+        audio_enabled: bool_prop(props, "audioEnabled", true),
+        active_slot: None,
+        angle_target: None,
+        zoom_target: None,
+        queued_mask: vec![0; words],
+        total_slots,
+        touch_active: false,
+        press_started_at: None,
+        drag_axis: DragAxis::None,
+        time: 0.0,
+        active_accent: [0.0, 0.95, 1.0],
+        active_bg: [0.1, 0.1, 0.15],
+        active_alt: [1.0, 0.5, 0.2],
+        height_total: prepared.map(|p| p.layout.height_total).unwrap_or(2.1),
+        radius: prepared.map(|p| p.layout.radius).unwrap_or(1.35),
+    }
+}
+
 fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width: f64, height: f64) {
     let prepared = props
         .and_then(|p| p.get("scene"))
         .and_then(|scene| parse_scene(scene));
-    let spin = props
-        .and_then(|p| p.get("spin"))
-        .and_then(|v| v.as_number())
-        .unwrap_or(0.0) as f32;
+    let spin = f32_prop(props, "spin", 0.0);
 
     let frame = CGRect::new(
         CGPoint::new(0.0, 0.0),
@@ -495,7 +620,7 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
         },
     );
     view.setFrame(frame);
-    layout_scene_chrome(view);
+    layout_metal_layer(view);
 
     *view.ivars().pan_target.ivars().prepared.borrow_mut() = prepared.clone();
 
@@ -509,27 +634,19 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
         let new_fp = prepared.as_ref().map(scene_fingerprint).unwrap_or(0);
         let scene_changed = new_fp != old_fp;
 
-        host.prepared = prepared;
+        host.prepared = prepared.clone();
         host.scene_fingerprint = new_fp;
         if scene_changed {
             host.reset_renderer();
-            let cols = host.prepared.as_ref().map(|p| p.layout.cols).unwrap_or(1);
-            let init_angle = host
-                .prepared
-                .as_ref()
-                .and_then(|p| p.cards.first())
-                .map(|c| PI - c.theta)
-                .unwrap_or(0.0);
-            let mut s = host.state.lock().unwrap();
-            s.angle = init_angle;
-            s.drag_velocity = 0.0;
-            s.cols = cols;
-            s.zoom = 0.0;
-            s.active_index = None;
-            s.angle_target = None;
-            s.zoom_target = None;
-            s.queued_bits = 0;
-            s.press_started_at = None;
+            let mut s = make_initial_state(host.prepared.as_ref(), spin, props);
+            let prev = host.state.lock().unwrap();
+            s.lighting = prev.lighting;
+            drop(prev);
+            *host.state.lock().unwrap() = s;
+        } else if prepared.is_some() && host.prepared.is_none() {
+            // Scene arrived after mount (incremental prepare) — rebuild renderer/state.
+            host.reset_renderer();
+            *host.state.lock().unwrap() = make_initial_state(host.prepared.as_ref(), spin, props);
         }
         {
             let mut s = host.state.lock().unwrap();
@@ -538,9 +655,22 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
                 s.drag_velocity = 0.0;
             }
             s.spin = spin;
+            if let Some(p) = props {
+                s.zoom_tight = f32_prop(props, "zoomTight", s.zoom_tight);
+                s.zoom_flat = f32_prop(props, "zoomFlat", s.zoom_flat);
+                s.show_categories = bool_prop(props, "showCategories", s.show_categories);
+                s.audio_enabled = bool_prop(props, "audioEnabled", s.audio_enabled);
+            }
+            if let Some(p) = host.prepared.as_ref() {
+                s.height_total = p.layout.height_total;
+                s.radius = p.layout.radius;
+                s.total_slots = p.layout.total_slots.max(p.cards.len() as u32);
+                let words = queue_words_for_slots(s.total_slots);
+                s.queued_mask.resize(words, 0);
+            }
+            set_audio_enabled(s.audio_enabled);
         }
     }
-    sync_status_label(view);
 }
 
 fn start_display_link(_mtm: MainThreadMarker, view: &JukeSceneHostView) {
@@ -571,33 +701,16 @@ fn create_scene_host_view(
     let prepared = props
         .and_then(|p| p.get("scene"))
         .and_then(|scene| parse_scene(scene));
-
-    let spin = props
-        .and_then(|p| p.get("spin"))
-        .and_then(|v| v.as_number())
-        .unwrap_or(0.0) as f32;
-    let cols = prepared.as_ref().map(|p| p.layout.cols).unwrap_or(1);
-    let init_angle = prepared
-        .as_ref()
-        .and_then(|p| p.cards.first())
-        .map(|c| PI - c.theta)
-        .unwrap_or(0.0);
+    let spin = f32_prop(props, "spin", 0.0);
     let prepared_for_pan = prepared.clone();
     let prepared_fp = prepared.as_ref().map(scene_fingerprint).unwrap_or(0);
 
-    let state = Arc::new(Mutex::new(SceneState {
-        angle: init_angle,
-        drag_velocity: 0.0,
+    let state = Arc::new(Mutex::new(make_initial_state(
+        prepared.as_ref(),
         spin,
-        cols,
-        zoom: 0.0,
-        active_index: None,
-        angle_target: None,
-        zoom_target: None,
-        queued_bits: 0,
-        touch_active: false,
-        press_started_at: None,
-    }));
+        props,
+    )));
+    set_audio_enabled(state.lock().unwrap().audio_enabled);
 
     let metal_layer = CAMetalLayer::new();
     if let Some(device) = MTLCreateSystemDefaultDevice() {
@@ -614,27 +727,18 @@ fn create_scene_host_view(
             long_press_fired: RefCell::new(false),
             drag_occurred: RefCell::new(false),
             touch_start: RefCell::new((0.0, 0.0)),
+            drag_axis: RefCell::new(DragAxis::None),
+            last_tap_at: RefCell::new(0.0),
+            pinch_start_dist: RefCell::new(None),
             view: RefCell::new(None),
         });
         msg_send![super(partial), init]
     };
 
-    let pick_label = UILabel::new(mtm);
-    pick_label.setText(Some(&NSString::from_str("Active: — · Queued: 0")));
-    unsafe {
-        pick_label.setTextColor(Some(&UIColor::whiteColor()));
-        pick_label.setBackgroundColor(Some(&UIColor::blackColor()));
-        pick_label.setFont(Some(&UIFont::systemFontOfSize(13.0)));
-        pick_label.setAdjustsFontSizeToFitWidth(true);
-        pick_label.setMinimumScaleFactor(0.65);
-    }
-    pick_label.setUserInteractionEnabled(false);
-
     let view: Retained<JukeSceneHostView> = unsafe {
         let allocated = JukeSceneHostView::alloc(mtm);
         let partial = allocated.set_ivars(HostIvars {
             metal_layer: metal_layer.clone(),
-            pick_label: pick_label.clone(),
             host: RefCell::new(None),
             display_link: RefCell::new(None),
             pan_target: pan_target.clone(),
@@ -649,7 +753,6 @@ fn create_scene_host_view(
     view.setUserInteractionEnabled(true);
     view.setMultipleTouchEnabled(true);
     view.setAutoresizingMask(UIViewAutoresizing::FlexibleWidth | UIViewAutoresizing::FlexibleHeight);
-    view.addSubview(&pick_label);
     view.layer().addSublayer(metal_layer.as_ref());
 
     let host = SceneHost {
@@ -670,8 +773,7 @@ fn create_scene_host_view(
         },
     );
     view.setFrame(frame);
-    layout_scene_chrome(&view);
-    sync_status_label(&view);
+    layout_metal_layer(&view);
     start_display_link(mtm, &view);
 
     CACHED_SCENE_VIEW.with(|slot| {
@@ -688,13 +790,39 @@ pub fn install_scene_factory() {
     });
 }
 
-/// Latest selected card index from the cached scene view (`None` / no view → -1).
-pub fn active_card_index() -> i64 {
-    with_scene_state(|s| s.active_index.map(|i| i as i64).unwrap_or(-1)).unwrap_or(-1)
+pub fn active_slot_index() -> i64 {
+    with_scene_state(|s| s.active_slot.map(|i| i as i64).unwrap_or(-1)).unwrap_or(-1)
 }
 
-pub fn queued_card_count() -> i64 {
-    with_scene_state(|s| s.queued_bits.count_ones() as i64).unwrap_or(0)
+pub fn queued_slot_count() -> i64 {
+    with_scene_state(|s| queue_count(&s.queued_mask) as i64).unwrap_or(0)
+}
+
+pub fn lighting_value() -> f32 {
+    with_scene_state(|s| s.lighting).unwrap_or(0.5)
+}
+
+pub fn set_lighting_value(v: f32) {
+    if let Some(view) = CACHED_SCENE_VIEW.with(|slot| slot.borrow().clone()) {
+        if let Some(host) = view.ivars().host.borrow().as_ref() {
+            if let Ok(mut s) = host.state.lock() {
+                s.lighting = v.clamp(0.0, 1.0);
+            }
+        }
+    }
+}
+
+pub fn reset_scene_camera() {
+    if let Some(view) = CACHED_SCENE_VIEW.with(|slot| slot.borrow().clone()) {
+        if let Some(host) = view.ivars().host.borrow().as_ref() {
+            if let Ok(mut s) = host.state.lock() {
+                s.zoom = 0.0;
+                s.zoom_target = None;
+                s.active_slot = None;
+                s.angle_target = None;
+            }
+        }
+    }
 }
 
 fn with_scene_state<T>(f: impl FnOnce(&SceneState) -> T) -> Option<T> {

@@ -5,6 +5,10 @@ use std::sync::Arc;
 use tishlang_core::{ObjectMap, Value};
 
 #[cfg(target_os = "ios")]
+mod audio;
+#[cfg(target_os = "ios")]
+mod camera;
+#[cfg(target_os = "ios")]
 mod hit_test;
 #[cfg(target_os = "ios")]
 mod renderer;
@@ -25,10 +29,7 @@ fn ensure_factory() {}
 pub fn juke_scene_object() -> Value {
     ensure_factory();
 
-    let create = Value::native(|_args: &[Value]| {
-        // Scene views are created by the UIKit host via the registered factory.
-        Value::Null
-    });
+    let create = Value::native(|_args: &[Value]| Value::Null);
 
     let debug_parse = Value::native(|args: &[Value]| {
         #[cfg(target_os = "ios")]
@@ -46,7 +47,7 @@ pub fn juke_scene_object() -> Value {
     let get_active_index = Value::native(|_args: &[Value]| {
         #[cfg(target_os = "ios")]
         {
-            return Value::Number(view::active_card_index() as f64);
+            return Value::Number(view::active_slot_index() as f64);
         }
         #[cfg(not(target_os = "ios"))]
         {
@@ -57,7 +58,7 @@ pub fn juke_scene_object() -> Value {
     let get_queued_count = Value::native(|_args: &[Value]| {
         #[cfg(target_os = "ios")]
         {
-            return Value::Number(view::queued_card_count() as f64);
+            return Value::Number(view::queued_slot_count() as f64);
         }
         #[cfg(not(target_os = "ios"))]
         {
@@ -65,14 +66,49 @@ pub fn juke_scene_object() -> Value {
         }
     });
 
+    let get_lighting = Value::native(|_args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            return Value::Number(view::lighting_value() as f64);
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            Value::Number(0.5)
+        }
+    });
+
+    let set_lighting = Value::native(|args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            let v = args.first().and_then(|v| v.as_number()).unwrap_or(0.5) as f32;
+            view::set_lighting_value(v);
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            let _ = args;
+        }
+        Value::Null
+    });
+
+    let reset_scene_camera = Value::native(|_args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            view::reset_scene_camera();
+        }
+        Value::Null
+    });
+
     let mut m = ObjectMap::default();
     m.insert(Arc::from("createSceneView"), create);
     m.insert(Arc::from("debugSceneParse"), debug_parse);
     m.insert(Arc::from("getActiveIndex"), get_active_index);
     m.insert(Arc::from("getQueuedCount"), get_queued_count);
+    m.insert(Arc::from("getLighting"), get_lighting);
+    m.insert(Arc::from("setLighting"), set_lighting);
+    m.insert(Arc::from("resetSceneCamera"), reset_scene_camera);
     m.insert(
         Arc::from("version"),
-        Value::String("0.4.0-scene-port".into()),
+        Value::String("0.5.0-scene-port".into()),
     );
     Value::object(m)
 }

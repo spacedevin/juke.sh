@@ -2,6 +2,39 @@
 
 import { generateCardArt } from "@spacedevin/juke-cards"
 import { computeLayout, trackToCardSong } from "./scene.tish"
+import { generateCategoryAtlas } from "./categories.tish"
+
+fn makeCellFromSlot(slot, art, song) {
+  if (slot.track === null) {
+    return {
+      slotIndex: slot.index,
+      c: slot.c,
+      r: slot.r,
+      x: slot.x,
+      y: slot.y,
+      z: slot.z,
+      theta: slot.theta,
+      empty: true,
+    }
+  }
+  return {
+    slotIndex: slot.index,
+    c: slot.c,
+    r: slot.r,
+    x: slot.x,
+    y: slot.y,
+    z: slot.z,
+    theta: slot.theta,
+    empty: false,
+    canvas: art.canvas,
+    uri: song.uri,
+    titleA: song.titleA,
+    artist: song.artist,
+    accent: art.accent,
+    bg: art.bg,
+    alt: art.alt,
+  }
+}
 
 export fn createSceneBuilder(tracks, rows, seed) {
   let layout = computeLayout(tracks, rows, seed)
@@ -25,19 +58,9 @@ export fn stepSceneBuilder(builder, batchSize) {
     if (slot.track !== null) {
       let song = trackToCardSong(slot.track, slot.c, slot.r)
       let art = generateCardArt(song)
-      cells.push({
-        index: cells.length,
-        slotIndex: slot.index,
-        c: slot.c,
-        r: slot.r,
-        x: slot.x,
-        y: slot.y,
-        z: slot.z,
-        theta: slot.theta,
-        canvas: art.canvas,
-        titleA: song.titleA,
-        artist: song.artist,
-      })
+      cells.push(makeCellFromSlot(slot, art, song))
+    } else {
+      cells.push(makeCellFromSlot(slot, null, null))
     }
     i = i + 1
     n = n + 1
@@ -52,12 +75,16 @@ export fn stepSceneBuilder(builder, batchSize) {
 
 export fn sceneFromBuilder(builder) {
   let layout = builder.layout
+  let catAtlas = generateCategoryAtlas(layout.cols)
   return {
     cols: layout.cols,
     rows: layout.rows,
     radius: layout.radius,
     heightTotal: layout.heightTotal,
+    totalCells: layout.totalCells,
     cells: builder.cells,
+    categoryAtlas: catAtlas.canvas,
+    categoryCount: catAtlas.categoryCount,
   }
 }
 
@@ -65,10 +92,16 @@ export fn builderProgress(builder) {
   let total = builder.layout.slots.length
   let done = builder.slotIndex
   if (total < 1) { total = 1 }
+  let trackCards = 0
+  let j = 0
+  while (j < builder.cells.length) {
+    if (builder.cells[j].empty !== true) { trackCards = trackCards + 1 }
+    j = j + 1
+  }
   return {
     done: done,
     total: total,
-    cards: builder.cells.length,
+    cards: trackCards,
     tracks: builder.trackCount,
   }
 }
