@@ -120,11 +120,13 @@ pub struct PickCamera {
     pub zoom_flat: f32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PickedCard {
     pub slot_index: usize,
     pub c: u32,
     pub r: u32,
+    pub title: String,
+    pub uri: String,
     pub accent: [f32; 3],
     pub bg: [f32; 3],
     pub alt: [f32; 3],
@@ -206,6 +208,8 @@ pub fn pick_card_at_point(
                     slot_index: card.slot_index,
                     c: card.c,
                     r: card.r,
+                    title: card.title.clone(),
+                    uri: card.uri.clone(),
                     accent: card.accent,
                     bg: card.bg,
                     alt: card.alt,

@@ -10,6 +10,7 @@ tishlang_core = { path = "../../../tish/tish/crates/tish_core" }
 tish-apple-common = { path = "../../../tish/tish-apple/crates/tish-apple-common" }
 
 [target.'cfg(target_os = "ios")'.dependencies]
+tishlang_ui = { path = "../../../tish/tish/crates/tish_ui", default-features = false, features = ["runtime"] }
 metal = "0.29"
 objc2 = { version = "0.6", default-features = true }
 objc2-foundation = { version = "0.3", default-features = true, features = ["NSRunLoop"] }

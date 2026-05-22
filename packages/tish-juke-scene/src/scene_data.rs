@@ -68,6 +68,7 @@ pub struct CardInstance {
     pub c: u32,
     pub r: u32,
     pub title: String,
+    pub uri: String,
     pub empty: bool,
     pub x: f32,
     pub y: f32,
@@ -194,6 +195,10 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
             .or_else(|| cm.get("title"))
             .map(|v| v.to_display_string())
             .unwrap_or_default();
+        let uri = cm
+            .get("uri")
+            .map(|v| v.to_display_string())
+            .unwrap_or_default();
         let accent = cm
             .get("accent")
             .and_then(parse_hex_color)
@@ -247,6 +252,7 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
             c,
             r,
             title,
+            uri,
             empty: render_empty,
             x,
             y,

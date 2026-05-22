@@ -16,14 +16,19 @@ use objc2_quartz_core::{CACurrentMediaTime, CADisplayLink, CAMetalLayer};
 use objc2_ui_kit::{UIColor, UIEvent, UITouch, UIView, UIViewAutoresizing};
 
 use tish_apple_common::scene_host::register_scene_view_factory;
-use tishlang_core::ObjectMap;
+use tishlang_core::{ObjectMap, Value};
 
 use crate::audio::{play_selection_sound, set_audio_enabled};
+use crate::camera::advance_zoom;
 use crate::hit_test::{snap_angle_for_picked, pick_card_at_point, PickCamera};
 use crate::renderer::{DrumRenderer, DragAxis, SceneState};
 use crate::scene_data::{parse_scene, queue_words_for_slots, scene_fingerprint, grid_slot_theta, PreparedScene};
+use crate::scene_events::{flush_scene_events, schedule_scene_event, SceneEvent};
+use tishlang_ui::runtime::{RootId, LEGACY_ROOT_ID};
 
 const TAP_DRAG_THRESHOLD: f32 = 8.0;
+const TAP_MOVE_MAX: f32 = 8.0;
+const TAP_DURATION_MAX: f64 = 0.25;
 const ZOOM_AUTO_THRESHOLD: f32 = 0.5;
 const LONG_PRESS_SECONDS: f64 = 0.35;
 const DOUBLE_TAP_MS: f64 = 0.35;
@@ -47,7 +52,7 @@ fn pick_camera(state: &Arc<Mutex<SceneState>>) -> PickCamera {
     let s = state.lock().unwrap();
     PickCamera {
         angle: s.angle,
-        zoom: s.zoom,
+        zoom: s.zoom_display,
         zoom_tight: s.zoom_tight,
         zoom_flat: s.zoom_flat,
     }
@@ -58,7 +63,6 @@ fn begin_touch(state: &Arc<Mutex<SceneState>>) {
     s.touch_active = true;
     s.press_started_at = Some(CACurrentMediaTime());
     s.angle_target = None;
-    s.zoom_target = None;
     s.zoom_pending_after_snap = false;
     s.drag_velocity = 0.0;
     s.drag_axis = DragAxis::None;
@@ -97,6 +101,22 @@ fn f32_prop(props: Option<&ObjectMap>, key: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
+fn fn_prop(props: Option<&ObjectMap>, key: &str) -> Option<Value> {
+    props.and_then(|p| p.get(key)).and_then(|v| match v {
+        Value::Function(_) => Some(v.clone()),
+        _ => None,
+    })
+}
+
+fn root_id_prop(props: Option<&ObjectMap>) -> RootId {
+    props
+        .and_then(|p| p.get("rootId"))
+        .and_then(|v| v.as_number())
+        .map(|n| n as RootId)
+        .filter(|id| *id != 0)
+        .unwrap_or(LEGACY_ROOT_ID)
+}
+
 fn toggle_queue_bit(mask: &mut Vec<u32>, slot: usize) {
     let word = slot / 32;
     let bit = slot % 32;
@@ -126,7 +146,12 @@ pub struct PanIvars {
     pub touch_start: RefCell<(f32, f32)>,
     pub drag_axis: RefCell<DragAxis>,
     pub last_tap_at: RefCell<f64>,
-    pub pinch_start_dist: RefCell<Option<f32>>,
+    pub pinch_base_dist: RefCell<Option<f32>>,
+    pub pinch_base_zoom: RefCell<Option<f32>>,
+    pub on_select: RefCell<Option<Value>>,
+    pub on_queue: RefCell<Option<Value>>,
+    pub on_open_settings: RefCell<Option<Value>>,
+    pub root_id: RefCell<RootId>,
     pub view: RefCell<Option<Retained<JukeSceneHostView>>>,
 }
 
@@ -166,6 +191,12 @@ define_class!(
 
         #[unsafe(method(displayLinkTick:))]
         fn display_link_tick(&self, _link: Option<&AnyObject>) {
+            let pan = &self.ivars().pan_target;
+            let root_id = *pan.ivars().root_id.borrow();
+            let on_select = pan.ivars().on_select.borrow().clone();
+            let on_queue = pan.ivars().on_queue.borrow().clone();
+            let on_open_settings = pan.ivars().on_open_settings.borrow().clone();
+            flush_scene_events(root_id, &on_select, &on_queue, &on_open_settings);
             let Some(mut host) = self.ivars().host.borrow_mut().take() else {
                 return;
             };
@@ -216,11 +247,12 @@ define_class!(
         fn touches_ended(&self, touches: &NSSet<UITouch>, event: Option<&UIEvent>) {
             if let Some(ev) = event {
                 if let Some(all) = ev.allTouches() {
-                    if all.count() >= 2 {
+                    if all.count() < 2 {
                         self.ivars().pan_target.on_pinch_ended();
-                        return;
                     }
                 }
+            } else {
+                self.ivars().pan_target.on_pinch_ended();
             }
             if touches.count() > 1 {
                 self.ivars().pan_target.on_touch_ended();
@@ -279,7 +311,14 @@ impl JukeScenePanTarget {
     fn on_pinch_began(&self, touches: &NSSet<UITouch>) {
         if let Some(view) = self.ivars().view.borrow().clone() {
             if let Some(d) = touch_distance(touches, &view) {
-                *self.ivars().pinch_start_dist.borrow_mut() = Some(d);
+                {
+                    let state = self.ivars().state.clone();
+                    let mut s = state.lock().unwrap();
+                    s.pinch_active = true;
+                    s.zoom_velocity = 0.0;
+                    *self.ivars().pinch_base_dist.borrow_mut() = Some(d.max(1.0));
+                    *self.ivars().pinch_base_zoom.borrow_mut() = Some(s.zoom);
+                }
                 end_touch(&self.ivars().state);
             }
         }
@@ -292,27 +331,26 @@ impl JukeScenePanTarget {
         let Some(cur) = touch_distance(touches, &view) else {
             return;
         };
-        let mut start_slot = self.ivars().pinch_start_dist.borrow_mut();
-        let Some(start) = *start_slot else {
-            *start_slot = Some(cur);
+        let Some(base_dist) = *self.ivars().pinch_base_dist.borrow() else {
+            *self.ivars().pinch_base_dist.borrow_mut() = Some(cur.max(1.0));
             return;
         };
-        if start < 1.0 {
-            *start_slot = Some(cur);
+        let Some(base_zoom) = *self.ivars().pinch_base_zoom.borrow() else {
             return;
-        }
-        let scale = cur / start;
-        if (scale - 1.0).abs() > 0.002 {
-            let state = self.ivars().state.clone();
-            let mut s = state.lock().unwrap();
-            s.zoom = (s.zoom + (scale - 1.0) * 0.35).clamp(0.0, 1.0);
-            s.zoom_target = None;
-            *start_slot = Some(cur);
-        }
+        };
+        let ratio = cur / base_dist.max(1.0);
+        let state = self.ivars().state.clone();
+        let mut s = state.lock().unwrap();
+        // Web: spread → zoom in; 1× finger spread ≈ full 0→1 range.
+        s.zoom = base_zoom + (ratio - 1.0);
     }
 
     fn on_pinch_ended(&self) {
-        *self.ivars().pinch_start_dist.borrow_mut() = None;
+        *self.ivars().pinch_base_dist.borrow_mut() = None;
+        *self.ivars().pinch_base_zoom.borrow_mut() = None;
+        let state = self.ivars().state.clone();
+        let mut s = state.lock().unwrap();
+        s.pinch_active = false;
     }
 
     fn on_touch_began(&self, x: f32, y: f32) {
@@ -349,10 +387,9 @@ impl JukeScenePanTarget {
         let state = self.ivars().state.clone();
         let mut s = state.lock().unwrap();
         s.angle_target = None;
-        s.zoom_target = None;
         s.angle += dx * 0.018;
         s.drag_velocity = dx * 0.09;
-        s.zoom = (s.zoom - dy * 0.003).clamp(0.0, 1.0);
+        s.lighting = (s.lighting - dy * 0.003).clamp(0.0, 1.0);
         *self.ivars().touch_start.borrow_mut() = (x, y);
     }
 
@@ -363,24 +400,31 @@ impl JukeScenePanTarget {
             if let Some(view) = self.ivars().view.borrow().clone() {
                 let (sx, sy) = *self.ivars().touch_start.borrow();
                 let (px, py, vw, vh) = pick_surface(&view, sx, sy);
+                let move_dist = ((x - sx) * (x - sx) + (y - sy) * (y - sy)).sqrt();
+                let tap_duration = self
+                    .ivars()
+                    .state
+                    .lock()
+                    .unwrap()
+                    .press_started_at
+                    .map(|started| CACurrentMediaTime() - started)
+                    .unwrap_or(TAP_DURATION_MAX + 1.0);
+                let quick_tap =
+                    tap_duration <= TAP_DURATION_MAX && move_dist <= TAP_MOVE_MAX;
                 if self.try_select_at(px, py, vw, vh) {
                     *self.ivars().last_tap_at.borrow_mut() = 0.0;
-                } else {
+                } else if quick_tap {
                     let now = CACurrentMediaTime();
                     let last = *self.ivars().last_tap_at.borrow();
                     if now - last < DOUBLE_TAP_MS {
                         *self.ivars().last_tap_at.borrow_mut() = 0.0;
-                        let state = self.ivars().state.clone();
-                        let mut s = state.lock().unwrap();
-                        s.zoom = if s.zoom > 0.5 { 0.0 } else { 1.0 };
-                        s.zoom_target = None;
+                        schedule_scene_event(SceneEvent::OpenSettings);
                     } else {
                         *self.ivars().last_tap_at.borrow_mut() = now;
                     }
                 }
             }
         }
-        let _ = (x, y);
         end_touch(&self.ivars().state);
     }
 
@@ -428,6 +472,8 @@ impl JukeScenePanTarget {
         {
             let mut s = state.lock().unwrap();
             s.active_slot = Some(picked.slot_index);
+            s.active_uri = picked.uri.clone();
+            s.active_title = picked.title.clone();
             s.active_accent = picked.accent;
             s.active_bg = picked.bg;
             s.active_alt = picked.alt;
@@ -435,13 +481,13 @@ impl JukeScenePanTarget {
             clear_queue_bit(&mut s.queued_mask, picked.slot_index);
             if s.zoom < ZOOM_AUTO_THRESHOLD {
                 s.angle_target = Some(snap_angle_for_picked(s.angle, &prepared, &picked));
-                s.zoom_target = None;
                 s.zoom_pending_after_snap = true;
             }
         }
         if state.lock().unwrap().audio_enabled {
             play_selection_sound();
         }
+        schedule_scene_event(SceneEvent::Select(picked.slot_index));
         true
     }
 
@@ -466,6 +512,7 @@ impl JukeScenePanTarget {
         if state.lock().unwrap().audio_enabled {
             play_selection_sound();
         }
+        schedule_scene_event(SceneEvent::Queue(slot));
         true
     }
 }
@@ -501,7 +548,7 @@ impl SceneHost {
                     s.angle = target;
                     s.angle_target = None;
                     if s.zoom_pending_after_snap {
-                        s.zoom_target = Some(1.0);
+                        s.zoom = 1.0;
                         s.zoom_pending_after_snap = false;
                     }
                 } else {
@@ -515,15 +562,7 @@ impl SceneHost {
                 }
                 s.drag_velocity *= 0.94;
             }
-            if let Some(zt) = s.zoom_target {
-                let dz = zt - s.zoom;
-                if dz.abs() < 0.005 {
-                    s.zoom = zt;
-                    s.zoom_target = None;
-                } else {
-                    s.zoom += dz * 0.1;
-                }
-            }
+            advance_zoom(&mut s);
         }
         let layer = self.metal_layer_ref();
         let size = layer.drawable_size();
@@ -592,14 +631,18 @@ fn make_initial_state(
         spin,
         cols,
         zoom: 0.0,
+        zoom_display: 0.0,
+        zoom_velocity: 0.0,
+        pinch_active: false,
         lighting: f32_prop(props, "lighting", 0.5),
         zoom_tight: f32_prop(props, "zoomTight", 0.95),
         zoom_flat: f32_prop(props, "zoomFlat", 0.0),
         show_categories: bool_prop(props, "showCategories", true),
         audio_enabled: bool_prop(props, "audioEnabled", true),
         active_slot: None,
+        active_uri: String::new(),
+        active_title: String::new(),
         angle_target: None,
-        zoom_target: None,
         zoom_pending_after_snap: false,
         queued_mask: vec![0; words],
         total_slots,
@@ -632,6 +675,11 @@ fn apply_scene_props(view: &JukeSceneHostView, props: Option<&ObjectMap>, width:
     layout_metal_layer(view);
 
     *view.ivars().pan_target.ivars().prepared.borrow_mut() = prepared.clone();
+    *view.ivars().pan_target.ivars().on_select.borrow_mut() = fn_prop(props, "onSelect");
+    *view.ivars().pan_target.ivars().on_queue.borrow_mut() = fn_prop(props, "onQueue");
+    *view.ivars().pan_target.ivars().on_open_settings.borrow_mut() =
+        fn_prop(props, "onOpenSettings");
+    *view.ivars().pan_target.ivars().root_id.borrow_mut() = root_id_prop(props);
 
     {
         let mut host_slot = view.ivars().host.borrow_mut();
@@ -739,7 +787,12 @@ fn create_scene_host_view(
             touch_start: RefCell::new((0.0, 0.0)),
             drag_axis: RefCell::new(DragAxis::None),
             last_tap_at: RefCell::new(0.0),
-            pinch_start_dist: RefCell::new(None),
+            pinch_base_dist: RefCell::new(None),
+            pinch_base_zoom: RefCell::new(None),
+            on_select: RefCell::new(fn_prop(props, "onSelect")),
+            on_queue: RefCell::new(fn_prop(props, "onQueue")),
+            on_open_settings: RefCell::new(fn_prop(props, "onOpenSettings")),
+            root_id: RefCell::new(root_id_prop(props)),
             view: RefCell::new(None),
         });
         msg_send![super(partial), init]
@@ -804,6 +857,14 @@ pub fn active_slot_index() -> i64 {
     with_scene_state(|s| s.active_slot.map(|i| i as i64).unwrap_or(-1)).unwrap_or(-1)
 }
 
+pub fn active_uri_value() -> String {
+    with_scene_state(|s| s.active_uri.clone()).unwrap_or_default()
+}
+
+pub fn active_title_value() -> String {
+    with_scene_state(|s| s.active_title.clone()).unwrap_or_default()
+}
+
 pub fn queued_slot_count() -> i64 {
     with_scene_state(|s| queue_count(&s.queued_mask) as i64).unwrap_or(0)
 }
@@ -827,9 +888,13 @@ pub fn reset_scene_camera() {
         if let Some(host) = view.ivars().host.borrow().as_ref() {
             if let Ok(mut s) = host.state.lock() {
                 s.zoom = 0.0;
-                s.zoom_target = None;
+                s.zoom_display = 0.0;
+                s.zoom_velocity = 0.0;
+                s.pinch_active = false;
                 s.zoom_pending_after_snap = false;
                 s.active_slot = None;
+                s.active_uri.clear();
+                s.active_title.clear();
                 s.angle_target = None;
             }
         }

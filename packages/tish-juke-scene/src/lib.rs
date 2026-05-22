@@ -15,6 +15,8 @@ mod renderer;
 #[cfg(target_os = "ios")]
 mod scene_data;
 #[cfg(target_os = "ios")]
+mod scene_events;
+#[cfg(target_os = "ios")]
 mod view;
 
 #[cfg(target_os = "ios")]
@@ -52,6 +54,28 @@ pub fn juke_scene_object() -> Value {
         #[cfg(not(target_os = "ios"))]
         {
             Value::Number(-1.0)
+        }
+    });
+
+    let get_active_uri = Value::native(|_args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            return Value::String(view::active_uri_value().into());
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            Value::String(String::new().into())
+        }
+    });
+
+    let get_active_title = Value::native(|_args: &[Value]| {
+        #[cfg(target_os = "ios")]
+        {
+            return Value::String(view::active_title_value().into());
+        }
+        #[cfg(not(target_os = "ios"))]
+        {
+            Value::String(String::new().into())
         }
     });
 
@@ -102,6 +126,8 @@ pub fn juke_scene_object() -> Value {
     m.insert(Arc::from("createSceneView"), create);
     m.insert(Arc::from("debugSceneParse"), debug_parse);
     m.insert(Arc::from("getActiveIndex"), get_active_index);
+    m.insert(Arc::from("getActiveUri"), get_active_uri);
+    m.insert(Arc::from("getActiveTitle"), get_active_title);
     m.insert(Arc::from("getQueuedCount"), get_queued_count);
     m.insert(Arc::from("getLighting"), get_lighting);
     m.insert(Arc::from("setLighting"), set_lighting);
