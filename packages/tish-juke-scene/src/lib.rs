@@ -9,6 +9,8 @@ mod audio;
 #[cfg(target_os = "ios")]
 mod camera;
 #[cfg(target_os = "ios")]
+mod lights;
+#[cfg(target_os = "ios")]
 mod hit_test;
 #[cfg(target_os = "ios")]
 mod renderer;

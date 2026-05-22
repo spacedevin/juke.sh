@@ -19,8 +19,9 @@ use tish_apple_common::scene_host::register_scene_view_factory;
 use tishlang_core::{ObjectMap, Value};
 
 use crate::audio::{play_selection_sound, set_audio_enabled};
-use crate::camera::advance_zoom;
+use crate::camera::{advance_zoom, CameraParams};
 use crate::hit_test::{snap_angle_for_picked, pick_card_at_point, PickCamera};
+use crate::lights::{LightColors, LightIntensities};
 use crate::renderer::{DrumRenderer, DragAxis, SceneState};
 use crate::scene_data::{parse_scene, queue_words_for_slots, scene_fingerprint, grid_slot_theta, PreparedScene};
 use crate::scene_events::{flush_scene_events, schedule_scene_event, SceneEvent};
@@ -51,7 +52,8 @@ fn shortest_angle_diff(from: f32, to: f32) -> f32 {
 fn pick_camera(state: &Arc<Mutex<SceneState>>) -> PickCamera {
     let s = state.lock().unwrap();
     PickCamera {
-        angle: s.angle,
+        drum_angle: s.angle,
+        camera_az: s.camera_az,
         zoom: s.zoom_display,
         zoom_tight: s.zoom_tight,
         zoom_flat: s.zoom_flat,
@@ -384,11 +386,34 @@ impl JukeScenePanTarget {
         let (sx, sy) = *self.ivars().touch_start.borrow();
         let dx = x - sx;
         let dy = y - sy;
+        let (view_w, view_h) = self
+            .ivars()
+            .view
+            .borrow()
+            .as_ref()
+            .map(|v| {
+                let scale = v.contentScaleFactor().max(1.0) as f32;
+                (
+                    (v.bounds().size.width as f32 * scale).max(1.0),
+                    (v.bounds().size.height as f32 * scale).max(1.0),
+                )
+            })
+            .unwrap_or((760.0, 760.0));
         let state = self.ivars().state.clone();
         let mut s = state.lock().unwrap();
         s.angle_target = None;
-        s.angle += dx * 0.018;
-        s.drag_velocity = dx * 0.09;
+        let params = CameraParams {
+            zoom: s.zoom_display,
+            zoom_tight: s.zoom_tight,
+            zoom_flat: s.zoom_flat,
+            aspect: view_w / view_h,
+            height_total: s.height_total,
+            radius: s.radius,
+            camera_az: s.camera_az,
+        };
+        let delta_az = params.drag_azimuth_delta(dx, view_h);
+        s.camera_az += delta_az;
+        s.drag_velocity = delta_az * 60.0;
         s.lighting = (s.lighting - dy * 0.003).clamp(0.0, 1.0);
         *self.ivars().touch_start.borrow_mut() = (x, y);
     }
@@ -480,7 +505,12 @@ impl JukeScenePanTarget {
             s.drag_velocity = 0.0;
             clear_queue_bit(&mut s.queued_mask, picked.slot_index);
             if s.zoom < ZOOM_AUTO_THRESHOLD {
-                s.angle_target = Some(snap_angle_for_picked(s.angle, &prepared, &picked));
+                s.angle_target = Some(snap_angle_for_picked(
+                    s.angle,
+                    s.camera_az,
+                    &prepared,
+                    &picked,
+                ));
                 s.zoom_pending_after_snap = true;
             }
         }
@@ -555,10 +585,10 @@ impl SceneHost {
                     s.angle += diff * 0.12;
                 }
                 s.drag_velocity = 0.0;
-            } else {
-                s.angle += s.drag_velocity;
-                if !s.touch_active && s.spin != 0.0 && s.cols > 0 {
-                    s.angle += s.spin * (2.0 * PI / s.cols as f32) * DT;
+            } else if !s.touch_active {
+                s.camera_az += s.drag_velocity / 60.0;
+                if s.spin != 0.0 && s.cols > 0 {
+                    s.camera_az += s.spin * (2.0 * PI / s.cols as f32) * DT;
                 }
                 s.drag_velocity *= 0.94;
             }
@@ -627,6 +657,7 @@ fn make_initial_state(
         .unwrap_or(0.0);
     SceneState {
         angle: init_angle,
+        camera_az: 0.0,
         drag_velocity: 0.0,
         spin,
         cols,
@@ -653,8 +684,20 @@ fn make_initial_state(
         active_accent: [0.0, 0.95, 1.0],
         active_bg: [0.1, 0.1, 0.15],
         active_alt: [1.0, 0.5, 0.2],
-        height_total: prepared.map(|p| p.layout.height_total).unwrap_or(2.1),
+        height_total: prepared
+            .map(|p| p.layout.height_total)
+            .unwrap_or(2.1),
         radius: prepared.map(|p| p.layout.radius).unwrap_or(1.35),
+        light_intensities: LightIntensities {
+            hemi: 0.5,
+            dir: 0.5,
+            point: 2.5,
+            ..Default::default()
+        },
+        light_colors: LightColors::default(),
+        led_card_slot: None,
+        local_led1_int: 0.0,
+        local_led2_int: 0.0,
     }
 }
 
@@ -896,6 +939,8 @@ pub fn reset_scene_camera() {
                 s.active_uri.clear();
                 s.active_title.clear();
                 s.angle_target = None;
+                s.camera_az = 0.0;
+                s.drag_velocity = 0.0;
             }
         }
     }

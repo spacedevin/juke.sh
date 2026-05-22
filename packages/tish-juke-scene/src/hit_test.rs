@@ -23,7 +23,7 @@ fn transform_corner(local: [f32; 3], card: &CardInstance) -> [f32; 3] {
     let ry = local[1];
     let rz = -s * local[0] + c * local[2];
     let mut wx = rx + card.x;
-    let mut wy = ry + card.y;
+    let wy = ry + card.y;
     let mut wz = rz + card.z;
     let radial = (card.x * card.x + card.z * card.z).sqrt().max(1e-4);
     wx += (card.x / radial) * CARD_SURFACE_PUSH;
@@ -31,30 +31,58 @@ fn transform_corner(local: [f32; 3], card: &CardInstance) -> [f32; 3] {
     [wx, wy, wz]
 }
 
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// Match Metal `project()` — lookAt from web OrbitControls camera position.
 fn project_point(
     world: [f32; 3],
     angle: f32,
-    cam_dist: f32,
+    cam_pos: [f32; 3],
     proj_f: f32,
     aspect: f32,
     view_w: f32,
     view_h: f32,
 ) -> Option<(f32, f32, f32)> {
-    let rot = rotate_y(world, angle);
-    let eye_z = rot[2] - cam_dist;
-    if eye_z >= -0.05 {
+    let p = rotate_y(world, angle);
+    let target = [0.0, 0.0, 0.0];
+    let forward = normalize(sub(target, cam_pos));
+    let world_up = [0.0, 1.0, 0.0];
+    let right = normalize(cross(forward, world_up));
+    let up = cross(right, forward);
+    let rel = sub(p, cam_pos);
+    let eye_x = dot(rel, right);
+    let eye_y = dot(rel, up);
+    let eye_z = dot(rel, forward);
+    if eye_z <= crate::camera::DEPTH_NEAR {
         return None;
     }
-    let eye_x = rot[0];
-    let eye_y = rot[1] + 0.15;
-    let ndc_x = eye_x * proj_f / aspect / (-eye_z);
-    let ndc_y = eye_y * proj_f / (-eye_z);
+    let ndc_x = eye_x * proj_f / aspect / eye_z;
+    let ndc_y = eye_y * proj_f / eye_z;
     if ndc_x.abs() > 1.5 || ndc_y.abs() > 1.5 {
         return None;
     }
     let sx = (ndc_x + 1.0) * 0.5 * view_w;
     let sy = (1.0 - ndc_y) * 0.5 * view_h;
-    Some((sx, sy, -eye_z))
+    Some((sx, sy, eye_z))
 }
 
 fn cross_2d(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
@@ -78,7 +106,7 @@ fn project_card_quad(
     card: &CardInstance,
     corners: &[[f32; 3]; 4],
     angle: f32,
-    cam_dist: f32,
+    cam_pos: [f32; 3],
     proj_f: f32,
     aspect: f32,
     view_w: f32,
@@ -88,7 +116,8 @@ fn project_card_quad(
     let mut depth = f32::INFINITY;
     for (i, local) in corners.iter().enumerate() {
         let world = transform_corner(*local, card);
-        let (sx, sy, d) = project_point(world, angle, cam_dist, proj_f, aspect, view_w, view_h)?;
+        let (sx, sy, d) =
+            project_point(world, angle, cam_pos, proj_f, aspect, view_w, view_h)?;
         screen[i] = (sx, sy);
         depth = depth.min(d);
     }
@@ -114,7 +143,9 @@ fn shortest_angle_diff(from: f32, to: f32) -> f32 {
 }
 
 pub struct PickCamera {
-    pub angle: f32,
+    /// Drum group rotation (`jukeboxGroup.rotation.y`) — snap-to-card only.
+    pub drum_angle: f32,
+    pub camera_az: f32,
     pub zoom: f32,
     pub zoom_tight: f32,
     pub zoom_flat: f32,
@@ -132,12 +163,10 @@ pub struct PickedCard {
     pub alt: [f32; 3],
 }
 
-/// Drum rotation target that brings `card_theta` to face the fixed camera.
-/// Mirrors web `groupRotTarget = curAz - card.theta`; Metal camera azimuth is fixed at 0.
-pub fn snap_target_angle(current: f32, card_theta: f32) -> f32 {
-    let cur_az = 0.0;
-    let target = cur_az - card_theta;
-    current + shortest_angle_diff(current, target)
+/// Drum snap target — web: `groupRotTarget = curAz - card.theta`.
+pub fn snap_target_angle(drum_angle: f32, camera_az: f32, card_theta: f32) -> f32 {
+    let target = camera_az - card_theta;
+    drum_angle + shortest_angle_diff(drum_angle, target)
 }
 
 /// Pick the front-most track card under a UIKit tap point (top-left origin, pixels).
@@ -160,8 +189,9 @@ pub fn pick_card_at_point(
         aspect,
         height_total: scene.layout.height_total,
         radius: scene.layout.radius,
+        camera_az: cam.camera_az,
     };
-    let cam_dist = params.cam_dist();
+    let cam_pos = params.camera_position();
     let proj_f = params.proj_f();
     let card_w = slot_card_width(scene.layout.cols, scene.layout.radius);
     let hw = card_w * 0.5;
@@ -175,14 +205,14 @@ pub fn pick_card_at_point(
 
     let mut best: Option<(PickedCard, f32, f32)> = None;
     for card in &scene.cards {
-        if card.empty || !card_faces_camera(card, cam.angle) {
+        if card.empty || !card_faces_camera(card, cam.drum_angle) {
             continue;
         }
         let Some((quad, depth)) = project_card_quad(
             card,
             &corners,
-            cam.angle,
-            cam_dist,
+            cam.drum_angle,
+            cam_pos,
             proj_f,
             aspect,
             view_w,
@@ -196,13 +226,7 @@ pub fn pick_card_at_point(
         let cx = (quad[0].0 + quad[1].0 + quad[2].0 + quad[3].0) * 0.25;
         let cy = (quad[0].1 + quad[1].1 + quad[2].1 + quad[3].1) * 0.25;
         let dist_sq = (cx - tap_x) * (cx - tap_x) + (cy - tap_y) * (cy - tap_y);
-        let dominated = best
-            .as_ref()
-            .map(|(_, bd, bd_dist)| {
-                depth > *bd + 1e-4 || (depth - *bd).abs() <= 1e-4 && dist_sq >= *bd_dist
-            })
-            .unwrap_or(false);
-        if !dominated {
+        if best.as_ref().is_none_or(|(_, d, ds)| depth < *d || (depth - *d).abs() < 0.01 && dist_sq < *ds) {
             best = Some((
                 PickedCard {
                     slot_index: card.slot_index,
@@ -219,10 +243,15 @@ pub fn pick_card_at_point(
             ));
         }
     }
-    best.map(|(picked, _, _)| picked)
+    best.map(|(p, _, _)| p)
 }
 
-pub fn snap_angle_for_picked(current: f32, scene: &PreparedScene, picked: &PickedCard) -> f32 {
-    let theta = grid_slot_theta(picked.c, picked.r, scene.layout.cols, scene.layout.rows);
-    snap_target_angle(current, theta)
+pub fn snap_angle_for_picked(drum_angle: f32, camera_az: f32, scene: &PreparedScene, picked: &PickedCard) -> f32 {
+    let theta = scene
+        .cards
+        .iter()
+        .find(|c| c.slot_index == picked.slot_index)
+        .map(|c| c.theta)
+        .unwrap_or_else(|| grid_slot_theta(picked.c, picked.r, scene.layout.cols, scene.layout.rows));
+    snap_target_angle(drum_angle, camera_az, theta)
 }

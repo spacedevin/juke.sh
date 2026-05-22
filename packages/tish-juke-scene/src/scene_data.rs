@@ -11,7 +11,12 @@ const CARD_W: f32 = 3.2;
 const CARD_GAP: f32 = 0.3;
 const ROW_SPACING: f32 = 1.4;
 const CARD_RADIAL_OFFSET: f32 = 0.12;
+const DRUM_HEIGHT_PAD: f32 = 4.0;
 const QUEUE_WORDS: usize = 16;
+
+pub fn layout_height_total(rows: u32) -> f32 {
+    rows.max(1) as f32 * ROW_SPACING + DRUM_HEIGHT_PAD
+}
 
 /// Grid slot pose — must match [`layout.tish`](../../juke-scene/src/layout.tish).
 pub(crate) fn grid_slot_theta(c: u32, r: u32, cols: u32, rows: u32) -> f32 {
@@ -155,7 +160,8 @@ pub fn parse_scene(scene: &Value) -> Option<PreparedScene> {
     let radius = num_field(m, "radius").unwrap_or(1.35) as f32;
     let height_total = num_field(m, "heightTotal")
         .or_else(|| num_field(m, "height_total"))
-        .unwrap_or(2.1) as f32;
+        .map(|n| n as f32)
+        .unwrap_or_else(|| layout_height_total(rows));
     let total_slots = num_field(m, "totalCells")
         .map(|n| n.max(1.0) as u32)
         .unwrap_or(cols * rows);
@@ -298,6 +304,8 @@ pub fn scene_fingerprint(p: &PreparedScene) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     p.layout.cols.hash(&mut h);
     p.layout.rows.hash(&mut h);
+    p.layout.radius.to_bits().hash(&mut h);
+    p.layout.height_total.to_bits().hash(&mut h);
     p.cards.len().hash(&mut h);
     for card in &p.cards {
         card.slot_index.hash(&mut h);
